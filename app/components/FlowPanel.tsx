@@ -60,7 +60,7 @@ export default function FlowPanel({
   return (
     <section className="flex h-full min-h-0 flex-col">
       <header className="border-b border-ink-700/70 px-4 py-3">
-        <h2 className="font-mono text-sm font-semibold text-ink-50">Inputs</h2>
+        <h2 className="text-sm font-semibold tracking-apple text-ink-50">Inputs</h2>
       </header>
 
       <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-4 py-4">
@@ -75,7 +75,7 @@ export default function FlowPanel({
             <select
               value={productId}
               onChange={(e) => onProductChange(e.target.value)}
-              className="w-full cursor-pointer rounded-md border border-run/40 bg-run/5 px-3 py-2 font-mono text-[13px] text-ink-100 outline-none transition-colors focus:border-run/60 focus:ring-1 focus:ring-run/40"
+              className="w-full cursor-pointer rounded-md border border-action/40 bg-action/5 px-3 py-2 font-mono text-[13px] text-ink-100 outline-none transition-colors focus:border-action/60 focus:ring-1 focus:ring-action/40"
             >
               {config.products.map((p) => (
                 <option key={p.id} value={p.id}>
@@ -91,7 +91,7 @@ export default function FlowPanel({
           <select
             value={inputs.jurisdiction}
             onChange={(e) => set('jurisdiction', e.target.value)}
-            className="w-full cursor-pointer rounded-md border border-ink-700 bg-ink-950/60 px-3 py-2 font-mono text-[13px] text-ink-100 outline-none transition-colors focus:border-run/60 focus:ring-1 focus:ring-run/40"
+            className="w-full cursor-pointer rounded-md border border-ink-700 bg-ink-950/60 px-3 py-2 font-mono text-[13px] text-ink-100 outline-none transition-colors focus:border-action/60 focus:ring-1 focus:ring-action/40"
           >
             {JURISDICTIONS.map(([code, label]) => (
               <option key={code} value={code}>
@@ -126,7 +126,7 @@ export default function FlowPanel({
                   max={120}
                   value={inputs.criteriaAge}
                   onChange={(e) => set('criteriaAge', e.target.value)}
-                  className="w-full rounded-md border border-ink-700 bg-ink-950/60 px-3 py-2 font-mono text-[13px] text-ink-100 outline-none transition-colors focus:border-run/60 focus:ring-1 focus:ring-run/40"
+                  className="w-full rounded-md border border-ink-700 bg-ink-950/60 px-3 py-2 font-mono text-[13px] text-ink-100 outline-none transition-colors focus:border-action/60 focus:ring-1 focus:ring-action/40"
                 />
               </Field>
             ) : (
@@ -134,7 +134,7 @@ export default function FlowPanel({
                 <select
                   value={inputs.criteriaCategory}
                   onChange={(e) => set('criteriaCategory', e.target.value as FlowInputs['criteriaCategory'])}
-                  className="w-full cursor-pointer rounded-md border border-ink-700 bg-ink-950/60 px-3 py-2 font-mono text-[13px] text-ink-100 outline-none transition-colors focus:border-run/60 focus:ring-1 focus:ring-run/40"
+                  className="w-full cursor-pointer rounded-md border border-ink-700 bg-ink-950/60 px-3 py-2 font-mono text-[13px] text-ink-100 outline-none transition-colors focus:border-action/60 focus:ring-1 focus:ring-action/40"
                 >
                   <option value="ADULT">ADULT</option>
                   <option value="DIGITAL_YOUTH_OR_ADULT">DIGITAL_YOUTH_OR_ADULT</option>
@@ -154,9 +154,9 @@ export default function FlowPanel({
                 key={dob}
                 type="button"
                 onClick={() => set('dateOfBirth', dob)}
-                className={`cursor-pointer rounded border px-2 py-1 font-mono text-[11px] transition-colors duration-200 ${
+                className={`cursor-pointer rounded-full border px-2.5 py-1 font-mono text-[11px] transition-all duration-200 ease-apple active:scale-95 ${
                   inputs.dateOfBirth === dob
-                    ? 'border-run/50 bg-run/10 text-run'
+                    ? 'border-action/50 bg-action/10 text-action'
                     : 'border-ink-700 text-ink-400 hover:border-ink-600 hover:text-ink-100'
                 }`}
               >
@@ -168,7 +168,7 @@ export default function FlowPanel({
             type="date"
             value={inputs.dateOfBirth}
             onChange={(e) => set('dateOfBirth', e.target.value)}
-            className="w-full rounded-md border border-ink-700 bg-ink-950/60 px-3 py-2 font-mono text-[13px] text-ink-100 outline-none transition-colors focus:border-run/60 focus:ring-1 focus:ring-run/40"
+            className="w-full rounded-md border border-ink-700 bg-ink-950/60 px-3 py-2 font-mono text-[13px] text-ink-100 outline-none transition-colors focus:border-action/60 focus:ring-1 focus:ring-action/40"
           />
         </Field>
 
@@ -180,7 +180,7 @@ export default function FlowPanel({
             placeholder="e.g. 14"
             value={inputs.age}
             onChange={(e) => set('age', e.target.value)}
-            className="w-full rounded-md border border-ink-700 bg-ink-950/60 px-3 py-2 font-mono text-[13px] text-ink-100 outline-none transition-colors placeholder:text-ink-600 focus:border-run/60 focus:ring-1 focus:ring-run/40"
+            className="w-full rounded-md border border-ink-700 bg-ink-950/60 px-3 py-2 font-mono text-[13px] text-ink-100 outline-none transition-colors placeholder:text-ink-600 focus:border-action/60 focus:ring-1 focus:ring-action/40"
           />
         </Field>
 
@@ -192,7 +192,7 @@ export default function FlowPanel({
               placeholder="parent@example.com"
               value={inputs.parentEmail}
               onChange={(e) => set('parentEmail', e.target.value)}
-              className="w-full rounded-md border border-ink-700 bg-ink-950/60 px-3 py-2 font-mono text-[13px] text-ink-100 outline-none transition-colors placeholder:text-ink-600 focus:border-run/60 focus:ring-1 focus:ring-run/40"
+              className="w-full rounded-md border border-ink-700 bg-ink-950/60 px-3 py-2 font-mono text-[13px] text-ink-100 outline-none transition-colors placeholder:text-ink-600 focus:border-action/60 focus:ring-1 focus:ring-action/40"
             />
           </Field>
         )}
@@ -203,7 +203,7 @@ export default function FlowPanel({
             placeholder="00000000-0000-0000-0000-000000000000"
             value={inputs.kuid}
             onChange={(e) => set('kuid', e.target.value)}
-            className="w-full rounded-md border border-ink-700 bg-ink-950/60 px-3 py-2 font-mono text-[12px] text-ink-100 outline-none transition-colors placeholder:text-ink-600 focus:border-run/60 focus:ring-1 focus:ring-run/40"
+            className="w-full rounded-md border border-ink-700 bg-ink-950/60 px-3 py-2 font-mono text-[12px] text-ink-100 outline-none transition-colors placeholder:text-ink-600 focus:border-action/60 focus:ring-1 focus:ring-action/40"
           />
         </Field>
       </div>
@@ -213,7 +213,7 @@ export default function FlowPanel({
         <button
           type="button"
           onClick={onReset}
-          className="w-full cursor-pointer rounded-md border border-ink-700 px-4 py-2 font-mono text-[12px] text-ink-300 transition-colors duration-200 hover:border-ink-600 hover:text-ink-50"
+          className="w-full cursor-pointer rounded-full border border-ink-700 px-4 py-2 font-mono text-[12px] text-ink-300 transition-all duration-200 ease-apple active:scale-[0.98] hover:border-action/50 hover:text-action"
         >
           Reset flow state
         </button>

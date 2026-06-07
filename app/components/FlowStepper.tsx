@@ -8,7 +8,15 @@ import type {
   KidSession,
 } from '@/lib/types'
 import type { FlowInputs } from './FlowPanel'
-import { Badge, CopyButton, MethodBadge, ageGateStatusColor } from './ui'
+import {
+  ActionButton,
+  Badge,
+  CopyButton,
+  MethodBadge,
+  ProgressBar,
+  StepNode,
+  ageGateStatusColor,
+} from './ui'
 
 export interface FlowState {
   requirements: AgeGateRequirements | null
@@ -48,14 +56,33 @@ export default function FlowStepper({
   const sessionId = state.challengeStatus?.sessionId ?? state.ageGate?.session?.sessionId ?? null
   const hasAgeInput = Boolean(inputs.dateOfBirth || inputs.age)
 
+  // Display-only journey progress derived from existing state.
+  const doneCount = [
+    state.requirements,
+    state.ageGate,
+    state.emailSentTo,
+    state.challengeStatus,
+    state.session,
+  ].filter(Boolean).length
+
   return (
     <section className="flex h-full min-h-0 flex-col">
-      <header className="flex items-center gap-2 border-b border-ink-700/70 px-4 py-3">
-        <h2 className="font-mono text-sm font-semibold text-ink-50">Flow</h2>
-        <span className="font-mono text-[11px] text-ink-500">age assurance → parental consent</span>
+      <header className="shrink-0 border-b border-ink-700/70 px-4 py-3">
+        <div className="flex items-center gap-2">
+          <h2 className="text-sm font-semibold tracking-apple text-ink-50">Flow</h2>
+          <span className="font-mono text-[11px] text-ink-500">
+            age assurance → parental consent
+          </span>
+          <span className="ml-auto font-mono text-[11px] text-ink-400">
+            {doneCount}/5 steps
+          </span>
+        </div>
+        <div className="mt-2">
+          <ProgressBar value={doneCount} total={5} tone={state.session ? 'pass' : 'action'} />
+        </div>
       </header>
 
-      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4">
+      <div className="min-h-0 flex-1 space-y-1 overflow-y-auto px-4 py-4">
         <GroupHeader
           title="Age Assurance"
           desc="Determine the player's age status and whether consent is required."
@@ -124,7 +151,10 @@ export default function FlowStepper({
           onRun={handlers.onSendEmail}
         >
           {state.emailSentTo && (
-            <div className="rounded-md border border-pass/40 bg-pass/5 px-3 py-2 font-mono text-[12px] text-pass">
+            <div className="flex items-center gap-2 rounded-lg border border-pass/40 bg-pass/5 px-3 py-2 font-mono text-[12px] text-pass">
+              <svg className="h-3.5 w-3.5 shrink-0" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M3 6l7 5 7-5M3 6v8h14V6" />
+              </svg>
               Consent challenge emailed to {state.emailSentTo}
             </div>
           )}
@@ -176,6 +206,7 @@ export default function FlowStepper({
           error={state.stepError.session}
           runLabel="Send"
           onRun={handlers.onSession}
+          last
         >
           {state.session && <SessionCard session={state.session} />}
         </StepCard>
@@ -198,12 +229,10 @@ function GroupHeader({
   const accent = tone === 'assurance' ? 'text-pending' : 'text-challenge'
   const bar = tone === 'assurance' ? 'bg-pending' : 'bg-challenge'
   return (
-    <div className="flex items-start gap-2 pt-1 first:pt-0">
-      <span className={`mt-1 h-3 w-1 shrink-0 rounded-full ${bar}`} />
+    <div className="flex items-start gap-2 pb-1 pt-3 first:pt-1">
+      <span className={`mt-1 h-3.5 w-1 shrink-0 rounded-full ${bar}`} />
       <div>
-        <h3 className={`font-mono text-[11px] font-bold uppercase tracking-wider ${accent}`}>
-          {title}
-        </h3>
+        <h3 className={`text-[11px] font-bold uppercase tracking-wider ${accent}`}>{title}</h3>
         <p className="mt-0.5 text-[11.5px] leading-snug text-ink-500">{desc}</p>
       </div>
     </div>
@@ -232,34 +261,31 @@ function TestHelper({
   onRun: () => void
 }) {
   return (
-    <div className="rounded-lg border border-dashed border-pending/40 bg-pending/5 p-4">
+    <div className="ml-[44px] mb-1 rounded-xl border border-dashed border-pending/40 bg-pending/5 p-4">
       <div className="flex items-start gap-3">
         <span className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full border border-pending/50 font-mono text-[10px] font-bold text-pending">
           TEST
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <h3 className="text-[13.5px] font-semibold text-ink-50">{title}</h3>
+            <h3 className="text-[13.5px] font-semibold tracking-apple text-ink-50">{title}</h3>
             <MethodBadge method="POST" />
             <span className="font-mono text-[11px] text-ink-500">{endpoint}</span>
           </div>
           <p className="mt-1 text-[12.5px] leading-relaxed text-ink-400">{desc}</p>
-          {done && <p className="mt-1.5 font-mono text-[11.5px] text-run">{doneLabel}</p>}
+          {done && (
+            <p className="mt-1.5 animate-fade-up font-mono text-[11.5px] text-pass">{doneLabel}</p>
+          )}
         </div>
-        <button
-          type="button"
-          onClick={onRun}
-          disabled={running}
-          className="shrink-0 cursor-pointer rounded-md border border-pending/50 bg-pending/10 px-3 py-1.5 font-mono text-[12px] font-semibold text-pending transition-colors duration-200 hover:bg-pending/20 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {running ? '…' : runLabel}
-        </button>
+        <ActionButton variant="amber" onClick={onRun} running={running}>
+          {running ? 'Running' : runLabel}
+        </ActionButton>
       </div>
     </div>
   )
 }
 
-// ── step shell ───────────────────────────────────────────────────────────────
+// ── step shell (journey node + card) ─────────────────────────────────────────
 
 function StepCard({
   index,
@@ -274,6 +300,7 @@ function StepCard({
   error,
   runLabel,
   onRun,
+  last,
   children,
 }: {
   index: number
@@ -288,58 +315,88 @@ function StepCard({
   error?: string
   runLabel: string
   onRun: () => void
+  last?: boolean
   children?: React.ReactNode
 }) {
-  const stateColor = error
-    ? 'border-prohibited/50 text-prohibited'
+  const nodeState = error
+    ? 'error'
     : done
-      ? 'border-run/50 text-run'
-      : enabled
-        ? 'border-ink-600 text-ink-300'
-        : 'border-ink-800 text-ink-600'
+      ? 'done'
+      : running
+        ? 'running'
+        : enabled
+          ? 'ready'
+          : 'locked'
+
+  const cardTone = error
+    ? 'border-prohibited/40 bg-prohibited/[0.03]'
+    : done
+      ? 'border-pass/30 bg-pass/[0.03]'
+      : running
+        ? 'border-action/40 bg-action/[0.03] shadow-glow'
+        : enabled
+          ? 'border-ink-700/70 bg-ink-900/60'
+          : 'border-ink-800/70 bg-ink-900/30'
 
   return (
-    <div
-      className={`rounded-lg border bg-ink-900/60 p-4 transition-colors duration-200 ${
-        error ? 'border-prohibited/40' : done ? 'border-run/30' : 'border-ink-700/70'
-      }`}
-    >
-      <div className="flex items-start gap-3">
-        <span
-          className={`mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full border font-mono text-[12px] font-bold ${stateColor}`}
-        >
-          {done && !error ? '✓' : index}
-        </span>
-
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <h3 className="text-[13.5px] font-semibold text-ink-50">{title}</h3>
-            <MethodBadge method={method} />
-            <span className="font-mono text-[11px] text-ink-500">{endpoint}</span>
-          </div>
-          <p className="mt-1 text-[12.5px] leading-relaxed text-ink-400">{desc}</p>
-        </div>
-
-        <button
-          type="button"
-          onClick={onRun}
-          disabled={!enabled || running}
-          title={!enabled ? disabledHint : undefined}
-          className="shrink-0 cursor-pointer rounded-md bg-run px-3 py-1.5 font-mono text-[12px] font-semibold text-ink-950 transition-colors duration-200 hover:bg-run-dark disabled:cursor-not-allowed disabled:bg-ink-700 disabled:text-ink-400"
-        >
-          {running ? '…' : runLabel}
-        </button>
+    <div className="flex gap-3.5">
+      {/* journey rail */}
+      <div className="flex flex-col items-center">
+        <StepNode index={index} state={nodeState} />
+        {!last && (
+          <span
+            className={`mt-1 w-0.5 flex-1 rounded-full transition-colors duration-500 ${
+              done ? 'bg-pass/40' : 'bg-ink-700/50'
+            }`}
+          />
+        )}
       </div>
 
-      {!enabled && disabledHint && (
-        <p className="mt-2 pl-10 font-mono text-[11px] text-ink-600">{disabledHint}</p>
-      )}
-      {error && (
-        <div className="mt-3 rounded-md border border-prohibited/40 bg-prohibited/10 px-3 py-2 font-mono text-[12px] text-prohibited">
-          {error}
+      {/* card */}
+      <div
+        className={`mb-3 min-w-0 flex-1 rounded-xl border p-4 transition-all duration-300 ease-apple ${cardTone} ${
+          enabled || running || done || error ? '' : 'opacity-70'
+        }`}
+      >
+        <div className="flex items-start gap-3">
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="text-[13.5px] font-semibold tracking-apple text-ink-50">{title}</h3>
+              <MethodBadge method={method} />
+              <span className="font-mono text-[11px] text-ink-500">{endpoint}</span>
+            </div>
+            <p className="mt-1 text-[12.5px] leading-relaxed text-ink-400">{desc}</p>
+          </div>
+
+          <ActionButton
+            onClick={onRun}
+            disabled={!enabled}
+            running={running}
+            title={!enabled ? disabledHint : undefined}
+          >
+            {running ? 'Running' : runLabel}
+          </ActionButton>
         </div>
-      )}
-      {children && <div className="mt-3 pl-0">{children}</div>}
+
+        {!enabled && disabledHint && (
+          <p className="mt-2 flex items-center gap-1.5 font-mono text-[11px] text-ink-600">
+            <svg className="h-3 w-3 shrink-0" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+              <path
+                fillRule="evenodd"
+                d="M10 1a4 4 0 00-4 4v2H5a2 2 0 00-2 2v6a2 2 0 002 2h10a2 2 0 002-2V9a2 2 0 00-2-2h-1V5a4 4 0 00-4-4zm2 6V5a2 2 0 10-4 0v2h4z"
+                clipRule="evenodd"
+              />
+            </svg>
+            {disabledHint}
+          </p>
+        )}
+        {error && (
+          <div className="mt-3 animate-fade-up rounded-lg border border-prohibited/40 bg-prohibited/10 px-3 py-2 font-mono text-[12px] text-prohibited">
+            {error}
+          </div>
+        )}
+        {children && <div className="mt-3 animate-fade-up">{children}</div>}
+      </div>
     </div>
   )
 }
@@ -348,7 +405,7 @@ function StepCard({
 
 function RequirementsResult({ data }: { data: AgeGateRequirements }) {
   return (
-    <div className="space-y-3 rounded-md border border-ink-700/60 bg-ink-950/40 p-3">
+    <div className="space-y-3 rounded-lg border border-ink-700/60 bg-ink-950/40 p-3">
       <div className="grid grid-cols-3 gap-2 font-mono text-[11.5px]">
         <Mini label="digitalConsentAge" value={String(data.digitalConsentAge)} />
         <Mini label="civilAge" value={String(data.civilAge)} />
@@ -384,7 +441,7 @@ function CheckResult({ data }: { data: AgeGateCheckResponse }) {
       </div>
 
       {data.challenge && (
-        <div className="space-y-3 rounded-md border border-challenge/40 bg-challenge/5 p-3">
+        <div className="space-y-3 rounded-lg border border-challenge/40 bg-challenge/5 p-3">
           <div className="flex items-center gap-2">
             <Badge className="border-challenge/50 bg-challenge/10 text-challenge">
               Parental Consent
@@ -410,7 +467,7 @@ function CheckResult({ data }: { data: AgeGateCheckResponse }) {
               href={data.challenge.url}
               target="_blank"
               rel="noreferrer"
-              className="inline-flex cursor-pointer items-center gap-1 font-mono text-[12px] text-pending underline-offset-2 hover:underline"
+              className="inline-flex cursor-pointer items-center gap-1 font-mono text-[12px] text-action underline-offset-2 transition-colors hover:underline"
             >
               consent link ↗
             </a>
@@ -428,7 +485,7 @@ function CheckResult({ data }: { data: AgeGateCheckResponse }) {
 
 function ChallengeStatusResult({ data }: { data: ChallengeStatusResponse }) {
   return (
-    <div className="space-y-2 rounded-md border border-ink-700/60 bg-ink-950/40 p-3">
+    <div className="space-y-2 rounded-lg border border-ink-700/60 bg-ink-950/40 p-3">
       <p className={`font-mono text-base font-bold ${ageGateStatusColor(data.status)}`}>
         {data.status}
       </p>
@@ -445,7 +502,7 @@ function ChallengeStatusResult({ data }: { data: ChallengeStatusResponse }) {
 
 function SessionCard({ session }: { session: KidSession }) {
   return (
-    <div className="space-y-3 rounded-md border border-ink-700/60 bg-ink-950/40 p-3">
+    <div className="space-y-3 rounded-lg border border-ink-700/60 bg-ink-950/40 p-3">
       <div className="flex items-center gap-2">
         <Badge className="border-pass/50 bg-pass/10 text-pass">Session</Badge>
         <span className="font-mono text-[11px] text-ink-500">{session.ageStatus}</span>
@@ -459,7 +516,7 @@ function SessionCard({ session }: { session: KidSession }) {
         <Mini label="managedBy" value={session.managedBy} />
       </div>
       {session.permissions?.length > 0 && (
-        <div className="overflow-hidden rounded-md ring-1 ring-inset ring-ink-700/60">
+        <div className="overflow-hidden rounded-lg ring-1 ring-inset ring-ink-700/60">
           <table className="w-full border-collapse font-mono text-[11.5px]">
             <tbody>
               {session.permissions.map((p) => (
@@ -505,7 +562,7 @@ function Detail({
 
 function Mini({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded border border-ink-800 bg-ink-950/40 px-2 py-1">
+    <div className="rounded-lg border border-ink-800 bg-ink-950/40 px-2 py-1">
       <span className="block text-ink-500">{label}</span>
       <span className="block break-all text-ink-100">{value}</span>
     </div>

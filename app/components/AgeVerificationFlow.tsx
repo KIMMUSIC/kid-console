@@ -4,7 +4,7 @@ import React from 'react'
 import QRCode from 'qrcode'
 import type { AccessAgeVerificationResponse, VerificationStatusResponse } from '@/lib/types'
 import type { FlowInputs } from './FlowPanel'
-import { Badge, CopyButton, MethodBadge, ageGateStatusColor } from './ui'
+import { ActionButton, Badge, CopyButton, MethodBadge, ProgressBar, StepNode, ageGateStatusColor } from './ui'
 
 export interface AccessFlowState {
   accessAv: AccessAgeVerificationResponse | null
@@ -36,14 +36,29 @@ export default function AgeVerificationFlow({
   const canStart = Boolean(inputs.jurisdiction) && criteriaOk
   const av = state.accessAv
 
+  // Display-only journey progress.
+  const doneCount = [state.accessAv, state.verificationStatus].filter(Boolean).length
+
   return (
     <section className="flex h-full min-h-0 flex-col">
-      <header className="flex items-center gap-2 border-b border-ink-700/70 px-4 py-3">
-        <h2 className="font-mono text-sm font-semibold text-ink-50">AgeKit+ Access Age Verification</h2>
-        <span className="font-mono text-[11px] text-ink-500">perform → verify → get-status</span>
+      <header className="shrink-0 border-b border-ink-700/70 px-4 py-3">
+        <div className="flex items-center gap-2">
+          <h2 className="text-sm font-semibold tracking-apple text-ink-50">
+            AgeKit+ Access Age Verification
+          </h2>
+          <span className="font-mono text-[11px] text-ink-500">perform → verify → get-status</span>
+          <span className="ml-auto font-mono text-[11px] text-ink-400">{doneCount}/2 steps</span>
+        </div>
+        <div className="mt-2">
+          <ProgressBar
+            value={doneCount}
+            total={2}
+            tone={state.verificationStatus ? 'pass' : 'action'}
+          />
+        </div>
       </header>
 
-      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4">
+      <div className="min-h-0 flex-1 space-y-1 overflow-y-auto px-4 py-4">
         <GroupHeader
           title="Access Age Verification"
           desc="Standalone AgeKit+ verification (face / ID / etc). Returns its own request id and status — independent of the CDK age gate."
@@ -69,35 +84,38 @@ export default function AgeVerificationFlow({
 
         {/* Test helper — simulate the verification result */}
         {testMode && av?.id && (
-          <div className="rounded-lg border border-dashed border-pending/40 bg-pending/5 p-4">
+          <div className="ml-[44px] mb-1 rounded-xl border border-dashed border-pending/40 bg-pending/5 p-4">
             <div className="flex items-start gap-3">
               <span className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full border border-pending/50 font-mono text-[10px] font-bold text-pending">
                 TEST
               </span>
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2">
-                  <h3 className="text-[13.5px] font-semibold text-ink-50">Simulate verification result</h3>
+                  <h3 className="text-[13.5px] font-semibold tracking-apple text-ink-50">
+                    Simulate verification result
+                  </h3>
                   <MethodBadge method="POST" />
-                  <span className="font-mono text-[11px] text-ink-500">test/set-age-verification-status</span>
+                  <span className="font-mono text-[11px] text-ink-500">
+                    test/set-age-verification-status
+                  </span>
                 </div>
                 <p className="mt-1 text-[12.5px] leading-relaxed text-ink-400">
                   TEST mode only. Marks the request PASS (age 18+, age-estimation) without completing the
                   hosted flow, so you can reach step 2&apos;s result immediately.
                 </p>
                 {verificationSimulated && (
-                  <p className="mt-1.5 font-mono text-[11.5px] text-run">
+                  <p className="mt-1.5 animate-fade-up font-mono text-[11.5px] text-pass">
                     Verified (simulated) — now get status →
                   </p>
                 )}
               </div>
-              <button
-                type="button"
+              <ActionButton
+                variant="amber"
                 onClick={onSimulateVerification}
-                disabled={loadingStep === 'sim-verify'}
-                className="shrink-0 cursor-pointer rounded-md border border-pending/50 bg-pending/10 px-3 py-1.5 font-mono text-[12px] font-semibold text-pending transition-colors duration-200 hover:bg-pending/20 disabled:cursor-not-allowed disabled:opacity-50"
+                running={loadingStep === 'sim-verify'}
               >
-                {loadingStep === 'sim-verify' ? '…' : 'Simulate PASS'}
-              </button>
+                {loadingStep === 'sim-verify' ? 'Running' : 'Simulate PASS'}
+              </ActionButton>
             </div>
           </div>
         )}
@@ -116,6 +134,7 @@ export default function AgeVerificationFlow({
           error={state.errors['verify-status']}
           runLabel="Get status"
           onRun={onPollStatus}
+          last
         >
           {state.verificationStatus && <VerificationStatusResult data={state.verificationStatus} />}
         </StepCard>
@@ -141,7 +160,7 @@ function VerificationTarget({ av }: { av: AccessAgeVerificationResponse }) {
   }, [av.shortUrl, av.url])
 
   return (
-    <div className="space-y-3 rounded-md border border-ink-700/60 bg-ink-950/40 p-3">
+    <div className="space-y-3 rounded-lg border border-ink-700/60 bg-ink-950/40 p-3">
       <Detail label="id" value={av.id} mono copy />
 
       <div className="flex gap-1 border-b border-ink-700/70">
@@ -154,7 +173,7 @@ function VerificationTarget({ av }: { av: AccessAgeVerificationResponse }) {
       </div>
 
       {view === 'qr' ? (
-        <div className="flex flex-col items-center gap-3 sm:flex-row sm:items-start">
+        <div className="flex animate-fade-up flex-col items-center gap-3 sm:flex-row sm:items-start">
           {qr ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img
@@ -162,10 +181,10 @@ function VerificationTarget({ av }: { av: AccessAgeVerificationResponse }) {
               alt="QR code to open the verification on a phone"
               width={160}
               height={160}
-              className="h-40 w-40 shrink-0 rounded-md bg-ink-50 p-1"
+              className="h-40 w-40 shrink-0 rounded-lg bg-ink-50 p-1 shadow-product"
             />
           ) : (
-            <div className="grid h-40 w-40 shrink-0 place-items-center rounded-md border border-ink-700 font-mono text-[11px] text-ink-500">
+            <div className="grid h-40 w-40 shrink-0 place-items-center rounded-lg border border-ink-700 font-mono text-[11px] text-ink-500 shimmer-track">
               QR…
             </div>
           )}
@@ -177,7 +196,7 @@ function VerificationTarget({ av }: { av: AccessAgeVerificationResponse }) {
               href={av.shortUrl}
               target="_blank"
               rel="noreferrer"
-              className="block cursor-pointer break-all rounded border border-ink-700 px-2 py-1.5 font-mono text-[11.5px] text-pending transition-colors hover:border-ink-600 hover:text-pending"
+              className="block cursor-pointer break-all rounded-lg border border-ink-700 px-2 py-1.5 font-mono text-[11.5px] text-action transition-colors hover:border-action/60"
             >
               {av.shortUrl} ↗
             </a>
@@ -186,7 +205,7 @@ function VerificationTarget({ av }: { av: AccessAgeVerificationResponse }) {
                 href={av.url}
                 target="_blank"
                 rel="noreferrer"
-                className="cursor-pointer font-mono text-[11px] text-ink-400 underline-offset-2 hover:text-ink-200 hover:underline"
+                className="cursor-pointer font-mono text-[11px] text-ink-400 underline-offset-2 transition-colors hover:text-ink-200 hover:underline"
               >
                 full url ↗
               </a>
@@ -195,8 +214,8 @@ function VerificationTarget({ av }: { av: AccessAgeVerificationResponse }) {
           </div>
         </div>
       ) : (
-        <div className="space-y-1">
-          <div className="overflow-hidden rounded-md border border-ink-700/70 bg-white">
+        <div className="animate-fade-up space-y-1">
+          <div className="overflow-hidden rounded-lg border border-ink-700/70 bg-white shadow-product">
             <iframe
               title="k-ID AgeKit+ verification"
               src={av.url}
@@ -219,7 +238,7 @@ function VerificationStatusResult({ data }: { data: VerificationStatusResponse }
       ? `${data.age.low ?? '?'}–${data.age.high ?? '?'}`
       : null
   return (
-    <div className="space-y-2 rounded-md border border-ink-700/60 bg-ink-950/40 p-3">
+    <div className="space-y-2 rounded-lg border border-ink-700/60 bg-ink-950/40 p-3">
       <div className="flex items-center gap-3">
         <span className={`font-mono text-base font-bold ${ageGateStatusColor(data.status)}`}>
           {data.status}
@@ -248,10 +267,10 @@ function VerificationStatusResult({ data }: { data: VerificationStatusResponse }
 
 function GroupHeader({ title, desc }: { title: string; desc: string }) {
   return (
-    <div className="flex items-start gap-2">
-      <span className="mt-1 h-3 w-1 shrink-0 rounded-full bg-pending" />
+    <div className="flex items-start gap-2 pb-1 pt-1">
+      <span className="mt-1 h-3.5 w-1 shrink-0 rounded-full bg-pending" />
       <div>
-        <h3 className="font-mono text-[11px] font-bold uppercase tracking-wider text-pending">{title}</h3>
+        <h3 className="text-[11px] font-bold uppercase tracking-wider text-pending">{title}</h3>
         <p className="mt-0.5 text-[11.5px] leading-snug text-ink-500">{desc}</p>
       </div>
     </div>
@@ -271,6 +290,7 @@ function StepCard({
   error,
   runLabel,
   onRun,
+  last,
   children,
 }: {
   index: number
@@ -285,54 +305,84 @@ function StepCard({
   error?: string
   runLabel: string
   onRun: () => void
+  last?: boolean
   children?: React.ReactNode
 }) {
-  const stateColor = error
-    ? 'border-prohibited/50 text-prohibited'
+  const nodeState = error
+    ? 'error'
     : done
-      ? 'border-run/50 text-run'
-      : enabled
-        ? 'border-ink-600 text-ink-300'
-        : 'border-ink-800 text-ink-600'
+      ? 'done'
+      : running
+        ? 'running'
+        : enabled
+          ? 'ready'
+          : 'locked'
+
+  const cardTone = error
+    ? 'border-prohibited/40 bg-prohibited/[0.03]'
+    : done
+      ? 'border-pass/30 bg-pass/[0.03]'
+      : running
+        ? 'border-action/40 bg-action/[0.03] shadow-glow'
+        : enabled
+          ? 'border-ink-700/70 bg-ink-900/60'
+          : 'border-ink-800/70 bg-ink-900/30'
+
   return (
-    <div
-      className={`rounded-lg border bg-ink-900/60 p-4 transition-colors duration-200 ${
-        error ? 'border-prohibited/40' : done ? 'border-run/30' : 'border-ink-700/70'
-      }`}
-    >
-      <div className="flex items-start gap-3">
-        <span
-          className={`mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full border font-mono text-[12px] font-bold ${stateColor}`}
-        >
-          {done && !error ? '✓' : index}
-        </span>
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <h3 className="text-[13.5px] font-semibold text-ink-50">{title}</h3>
-            <MethodBadge method={method} />
-            <span className="font-mono text-[11px] text-ink-500">{endpoint}</span>
-          </div>
-          <p className="mt-1 text-[12.5px] leading-relaxed text-ink-400">{desc}</p>
-        </div>
-        <button
-          type="button"
-          onClick={onRun}
-          disabled={!enabled || running}
-          title={!enabled ? disabledHint : undefined}
-          className="shrink-0 cursor-pointer rounded-md bg-run px-3 py-1.5 font-mono text-[12px] font-semibold text-ink-950 transition-colors duration-200 hover:bg-run-dark disabled:cursor-not-allowed disabled:bg-ink-700 disabled:text-ink-400"
-        >
-          {running ? '…' : runLabel}
-        </button>
+    <div className="flex gap-3.5">
+      <div className="flex flex-col items-center">
+        <StepNode index={index} state={nodeState} />
+        {!last && (
+          <span
+            className={`mt-1 w-0.5 flex-1 rounded-full transition-colors duration-500 ${
+              done ? 'bg-pass/40' : 'bg-ink-700/50'
+            }`}
+          />
+        )}
       </div>
-      {!enabled && disabledHint && (
-        <p className="mt-2 pl-10 font-mono text-[11px] text-ink-600">{disabledHint}</p>
-      )}
-      {error && (
-        <div className="mt-3 rounded-md border border-prohibited/40 bg-prohibited/10 px-3 py-2 font-mono text-[12px] text-prohibited">
-          {error}
+
+      <div
+        className={`mb-3 min-w-0 flex-1 rounded-xl border p-4 transition-all duration-300 ease-apple ${cardTone} ${
+          enabled || running || done || error ? '' : 'opacity-70'
+        }`}
+      >
+        <div className="flex items-start gap-3">
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="text-[13.5px] font-semibold tracking-apple text-ink-50">{title}</h3>
+              <MethodBadge method={method} />
+              <span className="font-mono text-[11px] text-ink-500">{endpoint}</span>
+            </div>
+            <p className="mt-1 text-[12.5px] leading-relaxed text-ink-400">{desc}</p>
+          </div>
+          <ActionButton
+            onClick={onRun}
+            disabled={!enabled}
+            running={running}
+            title={!enabled ? disabledHint : undefined}
+          >
+            {running ? 'Running' : runLabel}
+          </ActionButton>
         </div>
-      )}
-      {children && <div className="mt-3">{children}</div>}
+        {!enabled && disabledHint && (
+          <p className="mt-2 flex items-center gap-1.5 font-mono text-[11px] text-ink-600">
+            <svg className="h-3 w-3 shrink-0" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+              <path
+                fillRule="evenodd"
+                d="M10 1a4 4 0 00-4 4v2H5a2 2 0 00-2 2v6a2 2 0 002 2h10a2 2 0 002-2V9a2 2 0 00-2-2h-1V5a4 4 0 00-4-4zm2 6V5a2 2 0 10-4 0v2h4z"
+                clipRule="evenodd"
+              />
+            </svg>
+            {disabledHint}
+          </p>
+        )}
+        {error && (
+          <div className="mt-3 animate-fade-up rounded-lg border border-prohibited/40 bg-prohibited/10 px-3 py-2 font-mono text-[12px] text-prohibited">
+            {error}
+          </div>
+        )}
+        {children && <div className="mt-3 animate-fade-up">{children}</div>}
+      </div>
     </div>
   )
 }
@@ -351,7 +401,7 @@ function TabBtn({
       type="button"
       onClick={onClick}
       className={`cursor-pointer border-b-2 px-3 py-1 font-mono text-[12px] transition-colors duration-200 ${
-        active ? 'border-run text-ink-50' : 'border-transparent text-ink-500 hover:text-ink-200'
+        active ? 'border-action text-ink-50' : 'border-transparent text-ink-500 hover:text-ink-200'
       }`}
     >
       {children}
@@ -383,7 +433,7 @@ function Detail({
 
 function Mini({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded border border-ink-800 bg-ink-950/40 px-2 py-1 font-mono">
+    <div className="rounded-lg border border-ink-800 bg-ink-950/40 px-2 py-1 font-mono">
       <span className="block text-ink-500">{label}</span>
       <span className="block break-all text-ink-100">{value}</span>
     </div>

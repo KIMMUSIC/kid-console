@@ -444,13 +444,21 @@ export default function Console() {
 
 function FlowTabs({ active, onChange }: { active: ActiveFlow; onChange: (f: ActiveFlow) => void }) {
   return (
-    <div className="flex shrink-0 gap-1 border-b border-ink-700/70 bg-ink-950/40 px-3 pt-2">
-      <FlowTab active={active === 'access'} onClick={() => onChange('access')}>
-        AgeKit+ Access Verification
-      </FlowTab>
-      <FlowTab active={active === 'agegate'} onClick={() => onChange('agegate')}>
-        Age-gate + VPC
-      </FlowTab>
+    <div className="shrink-0 border-b border-ink-700/70 bg-ink-950/40 px-3 py-2.5">
+      <div className="relative grid grid-cols-2 overflow-hidden rounded-full border border-ink-700/70 bg-ink-900/60">
+        {/* sliding active indicator (DESIGN.md pill + scale/translate micro-interaction) */}
+        <span
+          aria-hidden
+          className="pointer-events-none absolute inset-y-0 left-0 w-1/2 rounded-full bg-action/15 ring-1 ring-inset ring-action/40 transition-transform duration-300 ease-apple"
+          style={{ transform: active === 'agegate' ? 'translateX(100%)' : 'translateX(0)' }}
+        />
+        <FlowTab active={active === 'access'} onClick={() => onChange('access')}>
+          AgeKit+ Access Verification
+        </FlowTab>
+        <FlowTab active={active === 'agegate'} onClick={() => onChange('agegate')}>
+          Age-gate + VPC
+        </FlowTab>
+      </div>
     </div>
   )
 }
@@ -468,10 +476,8 @@ function FlowTab({
     <button
       type="button"
       onClick={onClick}
-      className={`cursor-pointer rounded-t-md border-b-2 px-3 py-2 font-mono text-[12px] transition-colors duration-200 ${
-        active
-          ? 'border-run bg-ink-900 text-ink-50'
-          : 'border-transparent text-ink-500 hover:text-ink-200'
+      className={`relative z-10 cursor-pointer rounded-full px-3 py-2 text-center font-mono text-[12px] font-medium transition-colors duration-200 ${
+        active ? 'text-action' : 'text-ink-400 hover:text-ink-100'
       }`}
     >
       {children}
@@ -481,32 +487,33 @@ function FlowTab({
 
 function TopBar({ config, sseConnected }: { config: KidConfig | null; sseConnected: boolean }) {
   return (
-    <header className="grid-bg flex shrink-0 items-center gap-3 border-b border-ink-700/70 bg-ink-950/80 px-4 py-3">
-      <div className="grid h-8 w-8 place-items-center rounded-md bg-run/15 ring-1 ring-run/40">
-        <svg className="h-4 w-4 text-run" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+    <header className="grid-bg sticky top-0 z-20 flex shrink-0 items-center gap-3 border-b border-ink-700/70 bg-ink-950/70 px-4 py-3 backdrop-blur-md backdrop-saturate-150">
+      <div className="grid h-9 w-9 place-items-center rounded-xl bg-action/15 ring-1 ring-action/40 shadow-glow">
+        <svg className="h-4 w-4 text-action" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
           <path strokeLinecap="round" strokeLinejoin="round" d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6l7-3z" />
         </svg>
       </div>
-      <div>
-        <h1 className="font-mono text-[14px] font-bold tracking-tight text-ink-50">K-ID VPC Console</h1>
-        <p className="font-mono text-[11px] text-ink-500">
+      <div className="min-w-0">
+        <h1 className="text-[15px] font-semibold tracking-apple text-ink-50">K-ID VPC Console</h1>
+        <p className="truncate font-mono text-[11px] text-ink-500">
           AgeKit+ Age Verification · CDK Age-gate · Verifiable Parental Consent · live HTTP inspector
         </p>
       </div>
 
-      <div className="ml-auto flex items-center gap-3 font-mono text-[11px]">
+      <div className="ml-auto flex items-center gap-2.5 font-mono text-[11px]">
         {config && (
           <span
-            className={`hidden items-center gap-1.5 rounded border px-2 py-1 sm:inline-flex ${
+            className={`hidden items-center gap-1.5 rounded-full border px-2.5 py-1 sm:inline-flex ${
               config.testMode
                 ? 'border-pending/40 bg-pending/10 text-pending'
                 : 'border-prohibited/40 bg-prohibited/10 text-prohibited'
             }`}
           >
+            <span className={`h-1.5 w-1.5 rounded-full ${config.testMode ? 'bg-pending' : 'bg-prohibited'}`} />
             {config.testMode ? 'TEST MODE' : 'LIVE MODE'}
           </span>
         )}
-        <span className="inline-flex items-center gap-1.5 text-ink-400">
+        <span className="inline-flex items-center gap-1.5 rounded-full border border-ink-700/70 bg-ink-900/50 px-2.5 py-1 text-ink-400">
           <span className={`h-2 w-2 rounded-full ${sseConnected ? 'bg-run animate-pulse-dot' : 'bg-ink-600'}`} />
           webhook stream
         </span>

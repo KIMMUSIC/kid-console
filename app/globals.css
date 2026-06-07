@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 
 @tailwind base;
 @tailwind components;
@@ -16,6 +16,8 @@
 
   body {
     @apply bg-ink-900 text-ink-50 font-sans antialiased;
+    /* Inter tuned closer to SF Pro: rounded "a", tabular-ish numerals off. */
+    font-feature-settings: 'cv11', 'ss03';
   }
 
   /* Thin technical scrollbars to match the dev-tool aesthetic. */
@@ -37,17 +39,46 @@
     background: #475569;
     background-clip: padding-box;
   }
+
+  /* DESIGN.md: keyboard focus ring is the brighter accent sibling. */
+  :focus-visible {
+    outline: 2px solid #0071e3;
+    outline-offset: 2px;
+    border-radius: 6px;
+  }
 }
 
 @layer utilities {
   .text-balance {
     text-wrap: balance;
   }
+  /* DESIGN.md "Apple tight": negative tracking on display sizes only. */
+  .tracking-apple {
+    letter-spacing: -0.01em;
+  }
   .grid-bg {
     background-image:
       linear-gradient(rgba(148, 163, 184, 0.04) 1px, transparent 1px),
       linear-gradient(90deg, rgba(148, 163, 184, 0.04) 1px, transparent 1px);
     background-size: 28px 28px;
+  }
+  /* Shimmer sweep for skeleton / running states. */
+  .shimmer-track {
+    position: relative;
+    overflow: hidden;
+  }
+  .shimmer-track::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    transform: translateX(-100%);
+    background: linear-gradient(
+      90deg,
+      transparent,
+      rgba(41, 151, 255, 0.12),
+      transparent
+    );
+    animation: shimmer 1.5s infinite;
   }
 }
 
@@ -58,5 +89,8 @@
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+  }
+  .shimmer-track::after {
+    display: none;
   }
 }

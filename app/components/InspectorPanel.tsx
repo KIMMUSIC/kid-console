@@ -12,13 +12,52 @@ import {
   formatDuration,
 } from './ui'
 
-const HOP_META: Record<HttpExchange['hop'], { dot: string; ring: string; label: string }> = {
-  'browser->proxy': { dot: 'bg-pending', ring: 'ring-pending/30', label: 'Browser → Proxy' },
-  'proxy->kid': { dot: 'bg-run', ring: 'ring-run/30', label: 'Proxy → k-ID' },
-  webhook: { dot: 'bg-challenge', ring: 'ring-challenge/30', label: 'k-ID → Webhook' },
+const HOP_META: Record<
+  HttpExchange['hop'],
+  { dot: string; ring: string; label: string; from: string; to: string }
+> = {
+  'browser->proxy': {
+    dot: 'bg-pending',
+    ring: 'ring-pending/30',
+    label: 'Browser → Proxy',
+    from: 'Browser',
+    to: 'Proxy',
+  },
+  'proxy->kid': {
+    dot: 'bg-run',
+    ring: 'ring-run/30',
+    label: 'Proxy → k-ID',
+    from: 'Proxy',
+    to: 'k-ID',
+  },
+  webhook: {
+    dot: 'bg-challenge',
+    ring: 'ring-challenge/30',
+    label: 'k-ID → Webhook',
+    from: 'k-ID',
+    to: 'Webhook',
+  },
 }
 
-function ExchangeRow({ ex, defaultOpen }: { ex: HttpExchange; defaultOpen?: boolean }) {
+function HopArrow({ from, to }: { from: string; to: string }) {
+  return (
+    <span className="inline-flex items-center gap-1 font-mono text-[10px] uppercase tracking-wider text-ink-500">
+      <span className="text-ink-400">{from}</span>
+      <svg className="h-2.5 w-3 text-ink-600" viewBox="0 0 16 10" fill="none" aria-hidden="true">
+        <path
+          d="M1 5h13M10 1l4 4-4 4"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+      <span className="text-ink-400">{to}</span>
+    </span>
+  )
+}
+
+function ExchangeRow({ ex, defaultOpen, latest }: { ex: HttpExchange; defaultOpen?: boolean; latest?: boolean }) {
   const [open, setOpen] = React.useState(Boolean(defaultOpen))
   const [tab, setTab] = React.useState<'req' | 'res'>('res')
   const meta = HOP_META[ex.hop]
@@ -32,20 +71,22 @@ function ExchangeRow({ ex, defaultOpen }: { ex: HttpExchange; defaultOpen?: bool
   })()
 
   return (
-    <li className="animate-slide-in">
+    <li className="animate-fade-up">
       <div className="relative pl-6">
         {/* timeline dot */}
         <span
-          className={`absolute left-[5px] top-[10px] h-2.5 w-2.5 rounded-full ${meta.dot} ring-4 ${meta.ring}`}
+          className={`absolute left-[5px] top-[11px] h-2.5 w-2.5 rounded-full ${meta.dot} ring-4 ${meta.ring} ${
+            latest ? 'animate-ring-fade' : ''
+          }`}
         />
         <button
           type="button"
           onClick={() => setOpen((o) => !o)}
-          className="group flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors duration-200 hover:bg-ink-800/60"
+          className={`group flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors duration-200 hover:bg-ink-800/60 ${
+            open ? 'bg-ink-800/40' : ''
+          }`}
         >
-          <span className="font-mono text-[10px] uppercase tracking-wider text-ink-500">
-            {meta.label}
-          </span>
+          <HopArrow from={meta.from} to={meta.to} />
           <MethodBadge method={ex.request.method} />
           {ex.response ? (
             <StatusBadge status={ex.response.status} />
@@ -53,7 +94,7 @@ function ExchangeRow({ ex, defaultOpen }: { ex: HttpExchange; defaultOpen?: bool
             <StatusBadge status={0} statusText="ERR" />
           )}
           <span className="truncate font-mono text-[12px] text-ink-200">{ex.title}</span>
-          <span className="ml-auto whitespace-nowrap font-mono text-[11px] text-ink-500">
+          <span className="ml-auto whitespace-nowrap rounded-full bg-ink-800/70 px-2 py-0.5 font-mono text-[10.5px] text-ink-400">
             {formatDuration(ex.durationMs)}
           </span>
           <svg
@@ -71,7 +112,7 @@ function ExchangeRow({ ex, defaultOpen }: { ex: HttpExchange; defaultOpen?: bool
         </button>
 
         {open && (
-          <div className="mb-2 ml-2 space-y-3 rounded-lg border border-ink-700/70 bg-ink-900/60 p-3">
+          <div className="mb-2 ml-2 animate-fade-up space-y-3 rounded-xl border border-ink-700/70 bg-ink-900/60 p-3">
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[11px] text-ink-400">
               <span className="text-ink-500">{formatClock(ex.startedAt)}</span>
               <span className="break-all text-ink-300">{path}</span>
@@ -81,7 +122,7 @@ function ExchangeRow({ ex, defaultOpen }: { ex: HttpExchange; defaultOpen?: bool
             </div>
 
             {ex.error && (
-              <div className="rounded-md border border-prohibited/40 bg-prohibited/10 px-3 py-2 font-mono text-[12px] text-prohibited">
+              <div className="rounded-lg border border-prohibited/40 bg-prohibited/10 px-3 py-2 font-mono text-[12px] text-prohibited">
                 {ex.error}
               </div>
             )}
@@ -96,7 +137,7 @@ function ExchangeRow({ ex, defaultOpen }: { ex: HttpExchange; defaultOpen?: bool
             </div>
 
             {tab === 'req' ? (
-              <div className="space-y-2">
+              <div className="animate-fade-up space-y-2">
                 <SectionLabel>Request URL</SectionLabel>
                 <p className="break-all font-mono text-[12px] text-ink-100">
                   <span className="text-ink-500">{ex.request.method} </span>
@@ -112,7 +153,7 @@ function ExchangeRow({ ex, defaultOpen }: { ex: HttpExchange; defaultOpen?: bool
                 )}
               </div>
             ) : (
-              <div className="space-y-2">
+              <div className="animate-fade-up space-y-2">
                 {ex.response ? (
                   <>
                     <SectionLabel>Response Headers</SectionLabel>
@@ -146,9 +187,7 @@ function TabButton({
       type="button"
       onClick={onClick}
       className={`cursor-pointer border-b-2 px-3 py-1 font-mono text-[12px] transition-colors duration-200 ${
-        active
-          ? 'border-run text-ink-50'
-          : 'border-transparent text-ink-500 hover:text-ink-200'
+        active ? 'border-action text-ink-50' : 'border-transparent text-ink-500 hover:text-ink-200'
       }`}
     >
       {children}
@@ -176,8 +215,8 @@ export default function InspectorPanel({
   return (
     <section className="flex h-full min-h-0 flex-col">
       <header className="flex items-center gap-2 border-b border-ink-700/70 px-4 py-3">
-        <h2 className="font-mono text-sm font-semibold text-ink-50">HTTP Inspector</h2>
-        <span className="rounded bg-ink-800 px-1.5 py-0.5 font-mono text-[11px] text-ink-400">
+        <h2 className="text-sm font-semibold tracking-apple text-ink-50">HTTP Inspector</h2>
+        <span className="rounded-full bg-ink-800 px-2 py-0.5 font-mono text-[11px] text-ink-400">
           {exchanges.length}
         </span>
         <div className="ml-auto flex items-center gap-3">
@@ -188,7 +227,7 @@ export default function InspectorPanel({
             type="button"
             onClick={onClear}
             disabled={exchanges.length === 0}
-            className="cursor-pointer rounded border border-ink-700 px-2 py-0.5 font-mono text-[11px] text-ink-300 transition-colors duration-200 hover:border-ink-600 hover:text-ink-50 disabled:cursor-not-allowed disabled:opacity-40"
+            className="cursor-pointer rounded-full border border-ink-700 px-2.5 py-0.5 font-mono text-[11px] text-ink-300 transition-all duration-200 ease-apple active:scale-95 hover:border-action/50 hover:text-action disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-ink-700 disabled:hover:text-ink-300"
           >
             Clear
           </button>
@@ -197,7 +236,12 @@ export default function InspectorPanel({
 
       <div className="min-h-0 flex-1 overflow-y-auto px-2 py-3">
         {exchanges.length === 0 ? (
-          <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center">
+          <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
+            <span className="grid h-12 w-12 place-items-center rounded-full border border-ink-700/70 bg-ink-800/40 text-ink-500">
+              <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M4 7h16M4 12h16M4 17h10" />
+              </svg>
+            </span>
             <p className="font-mono text-[13px] text-ink-400">No traffic captured yet.</p>
             <p className="max-w-xs text-[13px] leading-relaxed text-ink-500">
               Run a flow on the left. Every hop — browser → proxy → k-ID and back, plus inbound
@@ -207,7 +251,12 @@ export default function InspectorPanel({
         ) : (
           <ol className="relative space-y-0.5 before:absolute before:bottom-2 before:left-[10px] before:top-2 before:w-px before:bg-ink-700/60">
             {exchanges.map((ex) => (
-              <ExchangeRow key={ex.id} ex={ex} defaultOpen={ex.id === latestId} />
+              <ExchangeRow
+                key={ex.id}
+                ex={ex}
+                defaultOpen={ex.id === latestId}
+                latest={ex.id === latestId}
+              />
             ))}
           </ol>
         )}
