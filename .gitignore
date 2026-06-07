@@ -1,0 +1,17 @@
+/node_modules
+/.next
+/out
+/build
+next-env.d.ts
+.env
+.env.local
+.env*.local
+*.log
+.DS_Store
+
+# Build cache
+tsconfig.tsbuildinfo
+
+# Local tooling state (oh-my-claudecode)
+/.omc
+/.omx
