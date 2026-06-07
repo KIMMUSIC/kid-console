@@ -4,7 +4,15 @@ import React from 'react'
 import QRCode from 'qrcode'
 import type { AccessAgeVerificationResponse, VerificationStatusResponse } from '@/lib/types'
 import type { FlowInputs } from './FlowPanel'
-import { ActionButton, Badge, CopyButton, MethodBadge, ProgressBar, StepNode, ageGateStatusColor } from './ui'
+import {
+  ActionButton,
+  Badge,
+  CopyButton,
+  MethodBadge,
+  ProgressRing,
+  StepNode,
+  ageGateStatusColor,
+} from './ui'
 
 export interface AccessFlowState {
   accessAv: AccessAgeVerificationResponse | null
@@ -12,8 +20,15 @@ export interface AccessFlowState {
   errors: Record<string, string | undefined>
 }
 
+const AGE_PRESETS: [string, string][] = [
+  ['Child · 8', '2017-08-15'],
+  ['Teen · 14', '2011-08-15'],
+  ['Adult · 27', '1998-08-15'],
+]
+
 export default function AgeVerificationFlow({
   inputs,
+  onChange,
   state,
   loadingStep,
   testMode,
@@ -21,8 +36,10 @@ export default function AgeVerificationFlow({
   onStart,
   onPollStatus,
   onSimulateVerification,
+  onHoverStep,
 }: {
   inputs: FlowInputs
+  onChange: (next: FlowInputs) => void
   state: AccessFlowState
   loadingStep: string | null
   testMode: boolean
@@ -30,41 +47,35 @@ export default function AgeVerificationFlow({
   onStart: () => void
   onPollStatus: () => void
   onSimulateVerification: () => void
+  onHoverStep?: (key: string | null) => void
 }) {
+  const set = <K extends keyof FlowInputs>(key: K, value: FlowInputs[K]) =>
+    onChange({ ...inputs, [key]: value })
+
   const criteriaOk =
     inputs.criteriaMode === 'age' ? Boolean(inputs.criteriaAge) : Boolean(inputs.criteriaCategory)
   const canStart = Boolean(inputs.jurisdiction) && criteriaOk
   const av = state.accessAv
 
-  // Display-only journey progress.
   const doneCount = [state.accessAv, state.verificationStatus].filter(Boolean).length
 
   return (
-    <section className="flex h-full min-h-0 flex-col">
-      <header className="shrink-0 border-b border-ink-700/70 px-4 py-3">
-        <div className="flex items-center gap-2">
-          <h2 className="text-sm font-semibold tracking-apple text-ink-50">
-            AgeKit+ Access Age Verification
-          </h2>
-          <span className="font-mono text-[11px] text-ink-500">perform → verify → get-status</span>
-          <span className="ml-auto font-mono text-[11px] text-ink-400">{doneCount}/2 steps</span>
-        </div>
-        <div className="mt-2">
-          <ProgressBar
-            value={doneCount}
-            total={2}
-            tone={state.verificationStatus ? 'pass' : 'action'}
-          />
-        </div>
+    <section className="flex h-full min-h-0 flex-col theme-tx">
+      <header className="flex shrink-0 items-center gap-2 border-b border-ink-700/70 px-4 py-3">
+        <h2 className="text-sm font-semibold tracking-apple text-ink-50">Journey</h2>
+        <span className="font-mono text-[11px] text-ink-500">perform → verify → get-status</span>
+        <span className="ml-auto font-mono text-[11px] text-ink-400">{doneCount}/2 steps</span>
       </header>
 
       <div className="min-h-0 flex-1 space-y-1 overflow-y-auto px-4 py-4">
+        <OutcomeHeader state={state} doneCount={doneCount} />
+
         <GroupHeader
           title="Access Age Verification"
           desc="Standalone AgeKit+ verification (face / ID / etc). Returns its own request id and status — independent of the CDK age gate."
         />
 
-        {/* Step 1 — perform-access-age-verification */}
+        {/* Step 1 — perform-access-age-verification (with contextual criteria inputs) */}
         <StepCard
           index={1}
           method="POST"
@@ -72,12 +83,88 @@ export default function AgeVerificationFlow({
           title="Create the verification request"
           desc="Returns { id, url, shortUrl }. The url hosts the AgeKit+ waterfall; shortUrl is QR-friendly."
           enabled={canStart}
-          disabledHint={!canStart ? 'Set jurisdiction and verification criteria (left)' : undefined}
+          disabledHint={!canStart ? 'Set verification criteria below' : undefined}
           running={loadingStep === 'access-av'}
           done={Boolean(av)}
           error={state.errors['access-av']}
           runLabel="Send"
           onRun={onStart}
+          onHover={onHoverStep}
+          form={
+            <CtxForm>
+              <CtxField label="Verification criteria" hint="required" badge>
+                <div className="mb-2 grid grid-cols-2 gap-1 rounded-full border border-ink-700/70 bg-ink-900/60 p-1">
+                  <MiniTab active={inputs.criteriaMode === 'age'} onClick={() => set('criteriaMode', 'age')}>
+                    Age threshold
+                  </MiniTab>
+                  <MiniTab
+                    active={inputs.criteriaMode === 'ageCategory'}
+                    onClick={() => set('criteriaMode', 'ageCategory')}
+                  >
+                    Age category
+                  </MiniTab>
+                </div>
+                {inputs.criteriaMode === 'age' ? (
+                  <input
+                    type="number"
+                    min={0}
+                    max={120}
+                    placeholder="pass if at least (age)"
+                    value={inputs.criteriaAge}
+                    onChange={(e) => set('criteriaAge', e.target.value)}
+                    className={ctxInput}
+                  />
+                ) : (
+                  <select
+                    value={inputs.criteriaCategory}
+                    onChange={(e) =>
+                      set('criteriaCategory', e.target.value as FlowInputs['criteriaCategory'])
+                    }
+                    className={`${ctxInput} cursor-pointer`}
+                  >
+                    <option value="ADULT">ADULT</option>
+                    <option value="DIGITAL_YOUTH_OR_ADULT">DIGITAL_YOUTH_OR_ADULT</option>
+                  </select>
+                )}
+              </CtxField>
+
+              <CtxField label="Subject hints" hint="optional">
+                <div className="mb-2 flex flex-wrap gap-1.5">
+                  {AGE_PRESETS.map(([label, dob]) => (
+                    <button
+                      key={dob}
+                      type="button"
+                      onClick={() => set('dateOfBirth', dob)}
+                      className={`cursor-pointer rounded-full border px-2.5 py-1 font-mono text-[11px] transition-all duration-200 ease-apple active:scale-95 ${
+                        inputs.dateOfBirth === dob
+                          ? 'border-action/50 bg-action/10 text-action'
+                          : 'border-ink-700 text-ink-400 hover:border-ink-600 hover:text-ink-100'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <input
+                    type="date"
+                    value={inputs.dateOfBirth}
+                    onChange={(e) => set('dateOfBirth', e.target.value)}
+                    className={ctxInput}
+                  />
+                  <input
+                    type="number"
+                    min={0}
+                    max={120}
+                    placeholder="claimed age"
+                    value={inputs.age}
+                    onChange={(e) => set('age', e.target.value)}
+                    className={ctxInput}
+                  />
+                </div>
+              </CtxField>
+            </CtxForm>
+          }
         >
           {av && <VerificationTarget av={av} />}
         </StepCard>
@@ -134,12 +221,39 @@ export default function AgeVerificationFlow({
           error={state.errors['verify-status']}
           runLabel="Get status"
           onRun={onPollStatus}
+          onHover={onHoverStep}
           last
         >
           {state.verificationStatus && <VerificationStatusResult data={state.verificationStatus} />}
         </StepCard>
       </div>
     </section>
+  )
+}
+
+// ── outcome header ───────────────────────────────────────────────────────────
+
+function OutcomeHeader({ state, doneCount }: { state: AccessFlowState; doneCount: number }) {
+  let label = 'Not started'
+  let color = 'text-ink-300'
+  let sub = 'Set criteria and create a verification request.'
+  if (state.verificationStatus) {
+    label = state.verificationStatus.status
+    color = ageGateStatusColor(state.verificationStatus.status)
+    sub = 'Authoritative verification result.'
+  } else if (state.accessAv) {
+    label = 'Awaiting verification'
+    color = 'text-pending'
+    sub = 'Scan the QR or run the hosted flow, then poll status.'
+  }
+  return (
+    <div className="mb-2 flex items-center gap-3 rounded-xl border border-ink-700/60 bg-ink-950/30 p-3">
+      <ProgressRing value={doneCount} total={2} tone={state.verificationStatus ? 'pass' : 'action'} />
+      <div className="min-w-0">
+        <div className={`text-[15px] font-bold tracking-apple ${color}`}>{label}</div>
+        <div className="truncate text-[12px] text-ink-400">{sub}</div>
+      </div>
+    </div>
   )
 }
 
@@ -263,7 +377,7 @@ function VerificationStatusResult({ data }: { data: VerificationStatusResponse }
   )
 }
 
-// ── shared bits (local to keep this flow self-contained) ─────────────────────
+// ── shared bits ──────────────────────────────────────────────────────────────
 
 function GroupHeader({ title, desc }: { title: string; desc: string }) {
   return (
@@ -274,6 +388,68 @@ function GroupHeader({ title, desc }: { title: string; desc: string }) {
         <p className="mt-0.5 text-[11.5px] leading-snug text-ink-500">{desc}</p>
       </div>
     </div>
+  )
+}
+
+const ctxInput =
+  'w-full rounded-md border border-ink-700 bg-ink-950/50 px-2.5 py-1.5 font-mono text-[12px] text-ink-100 outline-none transition-colors placeholder:text-ink-600 focus:border-action/60 focus:ring-1 focus:ring-action/40'
+
+function CtxForm({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="space-y-2.5 rounded-lg border border-dashed border-ink-700/70 bg-ink-950/30 p-3">
+      {children}
+    </div>
+  )
+}
+
+function CtxField({
+  label,
+  hint,
+  badge,
+  children,
+}: {
+  label: string
+  hint?: string
+  badge?: boolean
+  children: React.ReactNode
+}) {
+  return (
+    <div>
+      <div className="mb-1 flex items-center gap-2">
+        <span className="text-[11px] font-medium text-ink-200">{label}</span>
+        {hint && (
+          <span className={`font-mono text-[10px] ${badge ? 'text-challenge' : 'text-ink-500'}`}>
+            {hint}
+          </span>
+        )}
+        <span className="ml-auto font-mono text-[9px] font-bold uppercase tracking-wider text-action/70">
+          this step
+        </span>
+      </div>
+      {children}
+    </div>
+  )
+}
+
+function MiniTab({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean
+  onClick: () => void
+  children: React.ReactNode
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`cursor-pointer rounded-full px-2 py-1.5 font-mono text-[11px] transition-colors duration-200 ${
+        active ? 'bg-action/15 text-action ring-1 ring-inset ring-action/40' : 'text-ink-400 hover:text-ink-100'
+      }`}
+    >
+      {children}
+    </button>
   )
 }
 
@@ -290,6 +466,8 @@ function StepCard({
   error,
   runLabel,
   onRun,
+  onHover,
+  form,
   last,
   children,
 }: {
@@ -305,6 +483,8 @@ function StepCard({
   error?: string
   runLabel: string
   onRun: () => void
+  onHover?: (key: string | null) => void
+  form?: React.ReactNode
   last?: boolean
   children?: React.ReactNode
 }) {
@@ -319,14 +499,14 @@ function StepCard({
           : 'locked'
 
   const cardTone = error
-    ? 'border-prohibited/40 bg-prohibited/[0.03]'
+    ? 'border-prohibited/40 bg-prohibited/[0.04]'
     : done
-      ? 'border-pass/30 bg-pass/[0.03]'
+      ? 'border-pass/30 bg-pass/[0.04]'
       : running
-        ? 'border-action/40 bg-action/[0.03] shadow-glow'
+        ? 'border-action/40 bg-action/[0.04] shadow-glow'
         : enabled
-          ? 'border-ink-700/70 bg-ink-900/60'
-          : 'border-ink-800/70 bg-ink-900/30'
+          ? 'border-ink-700/70 bg-ink-950/20'
+          : 'border-ink-800/70 bg-ink-950/10'
 
   return (
     <div className="flex gap-3.5">
@@ -342,6 +522,8 @@ function StepCard({
       </div>
 
       <div
+        onMouseEnter={() => onHover?.(endpoint)}
+        onMouseLeave={() => onHover?.(null)}
         className={`mb-3 min-w-0 flex-1 rounded-xl border p-4 transition-all duration-300 ease-apple ${cardTone} ${
           enabled || running || done || error ? '' : 'opacity-70'
         }`}
@@ -364,6 +546,9 @@ function StepCard({
             {running ? 'Running' : runLabel}
           </ActionButton>
         </div>
+
+        {form && <div className="mt-3">{form}</div>}
+
         {!enabled && disabledHint && (
           <p className="mt-2 flex items-center gap-1.5 font-mono text-[11px] text-ink-600">
             <svg className="h-3 w-3 shrink-0" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">

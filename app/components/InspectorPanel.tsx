@@ -57,7 +57,17 @@ function HopArrow({ from, to }: { from: string; to: string }) {
   )
 }
 
-function ExchangeRow({ ex, defaultOpen, latest }: { ex: HttpExchange; defaultOpen?: boolean; latest?: boolean }) {
+function ExchangeRow({
+  ex,
+  defaultOpen,
+  latest,
+  highlighted,
+}: {
+  ex: HttpExchange
+  defaultOpen?: boolean
+  latest?: boolean
+  highlighted?: boolean
+}) {
   const [open, setOpen] = React.useState(Boolean(defaultOpen))
   const [tab, setTab] = React.useState<'req' | 'res'>('res')
   const meta = HOP_META[ex.hop]
@@ -72,7 +82,11 @@ function ExchangeRow({ ex, defaultOpen, latest }: { ex: HttpExchange; defaultOpe
 
   return (
     <li className="animate-fade-up">
-      <div className="relative pl-6">
+      <div
+        className={`relative rounded-lg pl-6 transition-colors duration-200 ${
+          highlighted ? 'bg-action/10 ring-1 ring-inset ring-action/40' : ''
+        }`}
+      >
         {/* timeline dot */}
         <span
           className={`absolute left-[5px] top-[11px] h-2.5 w-2.5 rounded-full ${meta.dot} ring-4 ${meta.ring} ${
@@ -206,9 +220,11 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 export default function InspectorPanel({
   exchanges,
   onClear,
+  highlightKey,
 }: {
   exchanges: HttpExchange[]
   onClear: () => void
+  highlightKey?: string | null
 }) {
   const latestId = exchanges.length > 0 ? exchanges[0].id : null
 
@@ -256,6 +272,7 @@ export default function InspectorPanel({
                 ex={ex}
                 defaultOpen={ex.id === latestId}
                 latest={ex.id === latestId}
+                highlighted={highlightKey != null && ex.title === highlightKey}
               />
             ))}
           </ol>

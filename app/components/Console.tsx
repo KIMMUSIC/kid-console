@@ -13,10 +13,23 @@ import type {
   SendEmailResponse,
   VerificationStatusResponse,
 } from '@/lib/types'
-import FlowPanel, { type ActiveFlow, type FlowInputs } from './FlowPanel'
+import { type ActiveFlow, type FlowInputs } from './FlowPanel'
 import FlowStepper, { type FlowState, type StepHandlers } from './FlowStepper'
 import AgeVerificationFlow, { type AccessFlowState } from './AgeVerificationFlow'
 import InspectorPanel from './InspectorPanel'
+import ThemeToggle from './ThemeToggle'
+
+const JURISDICTIONS: [string, string][] = [
+  ['US-CA', 'California, US'],
+  ['US', 'United States'],
+  ['GB', 'United Kingdom'],
+  ['DE', 'Germany'],
+  ['FR', 'France'],
+  ['KR', 'South Korea'],
+  ['AU', 'Australia'],
+  ['BR', 'Brazil'],
+  ['JP', 'Japan'],
+]
 
 function uid(): string {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID()
@@ -45,6 +58,8 @@ export default function Console() {
   const [sseConnected, setSseConnected] = React.useState(false)
   const [activeFlow, setActiveFlow] = React.useState<ActiveFlow>('access')
   const [productId, setProductId] = React.useState<string>('')
+  // Linked highlight: hovering a flow step highlights its HTTP exchange(s).
+  const [highlightKey, setHighlightKey] = React.useState<string | null>(null)
 
   const [inputs, setInputs] = React.useState<FlowInputs>({
     jurisdiction: 'US-CA',
@@ -390,80 +405,158 @@ export default function Console() {
   }
 
   return (
-    <div className="flex h-screen flex-col overflow-hidden">
+    <div className="flex min-h-screen flex-col bg-ink-900 lg:h-screen lg:overflow-hidden">
       <TopBar config={config} sseConnected={sseConnected} />
+      <ContextToolbar
+        config={config}
+        productId={productId}
+        onProductChange={setProductId}
+        jurisdiction={inputs.jurisdiction}
+        onJurisdictionChange={(j) => setInputs((p) => ({ ...p, jurisdiction: j }))}
+        activeFlow={activeFlow}
+        onFlowChange={setActiveFlow}
+        onReset={resetAll}
+      />
 
-      <main className="grid min-h-0 flex-1 grid-cols-1 gap-px bg-ink-700/40 lg:grid-cols-[320px_minmax(0,1fr)] xl:grid-cols-[340px_minmax(0,1fr)_minmax(0,0.9fr)]">
-        <div className="min-h-0 bg-ink-900">
-          <FlowPanel
-            config={config}
-            activeFlow={activeFlow}
-            inputs={inputs}
-            onChange={setInputs}
-            onReset={resetAll}
-            productId={productId}
-            onProductChange={setProductId}
+      <main className="flex flex-1 flex-col lg:grid lg:min-h-0 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
+        <div className="min-h-0 border-b border-ink-700/50 lg:overflow-hidden lg:border-b-0 lg:border-r">
+          {activeFlow === 'access' ? (
+            <AgeVerificationFlow
+              inputs={inputs}
+              onChange={setInputs}
+              state={access}
+              loadingStep={loadingStep}
+              testMode={testMode}
+              verificationSimulated={verificationSimulated}
+              onStart={runAccessAv}
+              onPollStatus={runVerifyStatus}
+              onSimulateVerification={runSimulateVerification}
+              onHoverStep={setHighlightKey}
+            />
+          ) : (
+            <FlowStepper
+              inputs={inputs}
+              onChange={setInputs}
+              state={flow}
+              loadingStep={loadingStep}
+              testMode={testMode}
+              consentSimulated={consentSimulated}
+              handlers={stepHandlers}
+              onSimulateConsent={runSimulateConsent}
+              onHoverStep={setHighlightKey}
+            />
+          )}
+        </div>
+
+        <div className="min-h-0 lg:overflow-hidden">
+          <InspectorPanel
+            exchanges={exchanges}
+            onClear={() => setExchanges([])}
+            highlightKey={highlightKey}
           />
-        </div>
-
-        <div className="flex min-h-0 flex-col bg-ink-900">
-          <FlowTabs active={activeFlow} onChange={setActiveFlow} />
-          <div className="min-h-0 flex-1">
-            {activeFlow === 'access' ? (
-              <AgeVerificationFlow
-                inputs={inputs}
-                state={access}
-                loadingStep={loadingStep}
-                testMode={testMode}
-                verificationSimulated={verificationSimulated}
-                onStart={runAccessAv}
-                onPollStatus={runVerifyStatus}
-                onSimulateVerification={runSimulateVerification}
-              />
-            ) : (
-              <FlowStepper
-                inputs={inputs}
-                state={flow}
-                loadingStep={loadingStep}
-                testMode={testMode}
-                consentSimulated={consentSimulated}
-                handlers={stepHandlers}
-                onSimulateConsent={runSimulateConsent}
-              />
-            )}
-          </div>
-        </div>
-
-        <div className="min-h-0 bg-ink-900">
-          <InspectorPanel exchanges={exchanges} onClear={() => setExchanges([])} />
         </div>
       </main>
     </div>
   )
 }
 
-function FlowTabs({ active, onChange }: { active: ActiveFlow; onChange: (f: ActiveFlow) => void }) {
+// ── context toolbar (consolidated global controls) ───────────────────────────
+
+function ContextToolbar({
+  config,
+  productId,
+  onProductChange,
+  jurisdiction,
+  onJurisdictionChange,
+  activeFlow,
+  onFlowChange,
+  onReset,
+}: {
+  config: KidConfig | null
+  productId: string
+  onProductChange: (id: string) => void
+  jurisdiction: string
+  onJurisdictionChange: (j: string) => void
+  activeFlow: ActiveFlow
+  onFlowChange: (f: ActiveFlow) => void
+  onReset: () => void
+}) {
   return (
-    <div className="shrink-0 border-b border-ink-700/70 bg-ink-950/40 px-3 py-2.5">
-      <div className="relative grid grid-cols-2 overflow-hidden rounded-full border border-ink-700/70 bg-ink-900/60">
-        {/* sliding active indicator (DESIGN.md pill + scale/translate micro-interaction) */}
-        <span
-          aria-hidden
-          className="pointer-events-none absolute inset-y-0 left-0 w-1/2 rounded-full bg-action/15 ring-1 ring-inset ring-action/40 transition-transform duration-300 ease-apple"
-          style={{ transform: active === 'agegate' ? 'translateX(100%)' : 'translateX(0)' }}
-        />
-        <FlowTab active={active === 'access'} onClick={() => onChange('access')}>
-          AgeKit+ Access Verification
-        </FlowTab>
-        <FlowTab active={active === 'agegate'} onClick={() => onChange('agegate')}>
-          Age-gate + VPC
-        </FlowTab>
-      </div>
+    <div className="z-10 flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-ink-700/60 bg-ink-950/40 px-4 py-2.5 theme-tx">
+      {config && config.products.length > 0 && (
+        <ToolGroup label="Product">
+          <select
+            value={productId}
+            onChange={(e) => onProductChange(e.target.value)}
+            className="cursor-pointer rounded-full border border-action/40 bg-action/5 px-3 py-1.5 font-mono text-[12px] text-ink-100 outline-none transition-colors focus:border-action/60"
+          >
+            {config.products.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.label}
+                {p.hasKey ? '' : ' — no key'}
+              </option>
+            ))}
+          </select>
+        </ToolGroup>
+      )}
+
+      <ToolGroup label="Region">
+        <select
+          value={jurisdiction}
+          onChange={(e) => onJurisdictionChange(e.target.value)}
+          className="cursor-pointer rounded-full border border-ink-700 bg-ink-900/60 px-3 py-1.5 font-mono text-[12px] text-ink-100 outline-none transition-colors focus:border-action/60"
+        >
+          {JURISDICTIONS.map(([code, name]) => (
+            <option key={code} value={code}>
+              {code} — {name}
+            </option>
+          ))}
+        </select>
+      </ToolGroup>
+
+      <Segmented active={activeFlow} onChange={onFlowChange} />
+
+      <button
+        type="button"
+        onClick={onReset}
+        className="ml-auto cursor-pointer rounded-full border border-ink-700 px-3.5 py-1.5 font-mono text-[12px] text-ink-300 transition-all duration-200 ease-apple active:scale-95 hover:border-action/50 hover:text-action"
+      >
+        Reset
+      </button>
     </div>
   )
 }
 
-function FlowTab({
+function ToolGroup({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex items-center gap-2">
+      <span className="font-mono text-[10px] font-semibold uppercase tracking-wider text-ink-500">
+        {label}
+      </span>
+      {children}
+    </div>
+  )
+}
+
+function Segmented({ active, onChange }: { active: ActiveFlow; onChange: (f: ActiveFlow) => void }) {
+  return (
+    <div className="relative grid grid-cols-2 overflow-hidden rounded-full border border-ink-700/70 bg-ink-900/60">
+      <span
+        aria-hidden
+        className="pointer-events-none absolute inset-y-0 left-0 w-1/2 rounded-full bg-action/15 ring-1 ring-inset ring-action/40 transition-transform duration-300 ease-apple"
+        style={{ transform: active === 'agegate' ? 'translateX(100%)' : 'translateX(0)' }}
+      />
+      <SegTab active={active === 'access'} onClick={() => onChange('access')}>
+        AgeKit+ Access
+      </SegTab>
+      <SegTab active={active === 'agegate'} onClick={() => onChange('agegate')}>
+        Age-gate + VPC
+      </SegTab>
+    </div>
+  )
+}
+
+function SegTab({
   active,
   onClick,
   children,
@@ -476,7 +569,7 @@ function FlowTab({
     <button
       type="button"
       onClick={onClick}
-      className={`relative z-10 cursor-pointer rounded-full px-3 py-2 text-center font-mono text-[12px] font-medium transition-colors duration-200 ${
+      className={`relative z-10 cursor-pointer whitespace-nowrap rounded-full px-4 py-1.5 text-center font-mono text-[12px] font-medium transition-colors duration-200 ${
         active ? 'text-action' : 'text-ink-400 hover:text-ink-100'
       }`}
     >
@@ -487,7 +580,7 @@ function FlowTab({
 
 function TopBar({ config, sseConnected }: { config: KidConfig | null; sseConnected: boolean }) {
   return (
-    <header className="grid-bg sticky top-0 z-20 flex shrink-0 items-center gap-3 border-b border-ink-700/70 bg-ink-950/70 px-4 py-3 backdrop-blur-md backdrop-saturate-150">
+    <header className="grid-bg sticky top-0 z-20 flex shrink-0 items-center gap-3 border-b border-ink-700/70 bg-ink-950/70 px-4 py-3 backdrop-blur-md backdrop-saturate-150 theme-tx">
       <div className="grid h-9 w-9 place-items-center rounded-xl bg-action/15 ring-1 ring-action/40 shadow-glow">
         <svg className="h-4 w-4 text-action" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
           <path strokeLinecap="round" strokeLinejoin="round" d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6l7-3z" />
@@ -513,10 +606,11 @@ function TopBar({ config, sseConnected }: { config: KidConfig | null; sseConnect
             {config.testMode ? 'TEST MODE' : 'LIVE MODE'}
           </span>
         )}
-        <span className="inline-flex items-center gap-1.5 rounded-full border border-ink-700/70 bg-ink-900/50 px-2.5 py-1 text-ink-400">
+        <span className="hidden items-center gap-1.5 rounded-full border border-ink-700/70 bg-ink-900/50 px-2.5 py-1 text-ink-400 sm:inline-flex">
           <span className={`h-2 w-2 rounded-full ${sseConnected ? 'bg-run animate-pulse-dot' : 'bg-ink-600'}`} />
           webhook stream
         </span>
+        <ThemeToggle />
       </div>
     </header>
   )

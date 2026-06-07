@@ -206,6 +206,32 @@ export function StepNode({
   )
 }
 
+/** Conic progress ring with a centered label — the journey's outcome glance. */
+export function ProgressRing({
+  value,
+  total,
+  tone = 'action',
+}: {
+  value: number
+  total: number
+  tone?: 'action' | 'pass' | 'pending'
+}) {
+  const pct = total > 0 ? Math.min(100, Math.round((value / total) * 100)) : 0
+  const color =
+    tone === 'pass' ? 'rgb(var(--pass))' : tone === 'pending' ? 'rgb(var(--pending))' : 'rgb(var(--action))'
+  return (
+    <div
+      className="grid h-12 w-12 shrink-0 place-items-center rounded-full transition-all duration-500 ease-apple"
+      style={{ background: `conic-gradient(${color} ${pct}%, rgb(var(--ink-800)) 0)` }}
+      aria-label={`${pct}% complete`}
+    >
+      <span className="grid h-9 w-9 place-items-center rounded-full bg-ink-950 font-mono text-[11px] font-bold text-ink-100">
+        {pct}%
+      </span>
+    </div>
+  )
+}
+
 /** Thin journey progress bar that grows with completion. */
 export function ProgressBar({
   value,

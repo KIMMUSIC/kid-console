@@ -4,9 +4,78 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ───────────────────────────────────────────────────────────────────────────
+   Theme tokens as RGB channels. Light is the default; [data-theme="dark"]
+   swaps the whole palette. Tailwind reads these via rgb(var(--x) / <alpha>),
+   so every existing utility (incl. /alpha) re-themes from this one switch.
+─────────────────────────────────────────────────────────────────────────── */
 @layer base {
-  :root {
+  :root,
+  :root[data-theme='light'] {
+    color-scheme: light;
+    /* surface/text scale — low = text, high = surface (Apple parchment) */
+    --ink-950: 255 255 255; /* canvas / cards */
+    --ink-900: 245 245 247; /* page background (parchment) */
+    --ink-800: 236 236 240; /* panels / chips */
+    --ink-700: 216 216 222; /* borders / hairline */
+    --ink-600: 188 188 194;
+    --ink-500: 142 142 147; /* faint text */
+    --ink-400: 110 110 115; /* muted text */
+    --ink-300: 81 81 88;
+    --ink-200: 58 58 61;
+    --ink-100: 42 42 44;
+    --ink-50: 29 29 31; /* primary text (ink) */
+
+    --run: 26 127 55; /* PASS green readable on light */
+    --run-dark: 21 110 47;
+    --action: 0 102 204; /* Action Blue (DESIGN.md, light surfaces) */
+    --action-deep: 0 88 176;
+    --action-focus: 0 113 227;
+    --action-dark: 0 88 176;
+
+    --pass: 26 127 55;
+    --challenge: 154 103 0;
+    --prohibited: 207 34 46;
+    --pending: 10 105 183;
+
+    --scrollbar: 210 210 215;
+    --scrollbar-hover: 180 180 186;
+
+    --shadow-product: rgba(0, 0, 0, 0.16) 0 8px 30px -10px;
+    --shadow-lift: 0 2px 4px rgba(0, 0, 0, 0.06), 0 16px 40px -16px rgba(0, 0, 0, 0.2);
+  }
+
+  :root[data-theme='dark'] {
     color-scheme: dark;
+    --ink-950: 11 17 32;
+    --ink-900: 15 23 42; /* background */
+    --ink-800: 30 41 59; /* panel */
+    --ink-700: 51 65 85; /* border */
+    --ink-600: 71 85 105;
+    --ink-500: 100 116 139;
+    --ink-400: 148 163 184;
+    --ink-300: 203 213 225;
+    --ink-200: 226 232 240;
+    --ink-100: 241 245 249;
+    --ink-50: 248 250 252; /* text */
+
+    --run: 34 197 94;
+    --run-dark: 22 163 74;
+    --action: 41 151 255; /* Sky Blue (DESIGN.md primary-on-dark) */
+    --action-deep: 0 102 204;
+    --action-focus: 0 113 227;
+    --action-dark: 26 134 240;
+
+    --pass: 34 197 94;
+    --challenge: 245 158 11;
+    --prohibited: 239 68 68;
+    --pending: 56 189 248;
+
+    --scrollbar: 51 65 85;
+    --scrollbar-hover: 71 85 105;
+
+    --shadow-product: rgba(0, 0, 0, 0.22) 3px 5px 30px 0;
+    --shadow-lift: 0 2px 4px rgba(0, 0, 0, 0.5), 0 16px 40px -16px rgba(0, 0, 0, 0.7);
   }
 
   html,
@@ -16,33 +85,34 @@
 
   body {
     @apply bg-ink-900 text-ink-50 font-sans antialiased;
-    /* Inter tuned closer to SF Pro: rounded "a", tabular-ish numerals off. */
     font-feature-settings: 'cv11', 'ss03';
+    transition:
+      background-color 0.45s cubic-bezier(0.16, 1, 0.3, 1),
+      color 0.45s cubic-bezier(0.16, 1, 0.3, 1);
   }
 
-  /* Thin technical scrollbars to match the dev-tool aesthetic. */
+  /* Theme-aware technical scrollbars. */
   * {
     scrollbar-width: thin;
-    scrollbar-color: #334155 transparent;
+    scrollbar-color: rgb(var(--scrollbar)) transparent;
   }
   *::-webkit-scrollbar {
     width: 9px;
     height: 9px;
   }
   *::-webkit-scrollbar-thumb {
-    background: #334155;
+    background: rgb(var(--scrollbar));
     border-radius: 9999px;
     border: 2px solid transparent;
     background-clip: padding-box;
   }
   *::-webkit-scrollbar-thumb:hover {
-    background: #475569;
+    background: rgb(var(--scrollbar-hover));
     background-clip: padding-box;
   }
 
-  /* DESIGN.md: keyboard focus ring is the brighter accent sibling. */
   :focus-visible {
-    outline: 2px solid #0071e3;
+    outline: 2px solid rgb(var(--action-focus));
     outline-offset: 2px;
     border-radius: 6px;
   }
@@ -52,7 +122,6 @@
   .text-balance {
     text-wrap: balance;
   }
-  /* DESIGN.md "Apple tight": negative tracking on display sizes only. */
   .tracking-apple {
     letter-spacing: -0.01em;
   }
@@ -62,7 +131,13 @@
       linear-gradient(90deg, rgba(148, 163, 184, 0.04) 1px, transparent 1px);
     background-size: 28px 28px;
   }
-  /* Shimmer sweep for skeleton / running states. */
+  /* Smooth color crossfade for surfaces when toggling theme. */
+  .theme-tx {
+    transition:
+      background-color 0.45s cubic-bezier(0.16, 1, 0.3, 1),
+      border-color 0.45s cubic-bezier(0.16, 1, 0.3, 1),
+      color 0.45s cubic-bezier(0.16, 1, 0.3, 1);
+  }
   .shimmer-track {
     position: relative;
     overflow: hidden;
@@ -72,12 +147,7 @@
     position: absolute;
     inset: 0;
     transform: translateX(-100%);
-    background: linear-gradient(
-      90deg,
-      transparent,
-      rgba(41, 151, 255, 0.12),
-      transparent
-    );
+    background: linear-gradient(90deg, transparent, rgb(var(--action) / 0.12), transparent);
     animation: shimmer 1.5s infinite;
   }
 }

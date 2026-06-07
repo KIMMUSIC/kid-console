@@ -15,3 +15,6 @@ tsconfig.tsbuildinfo
 # Local tooling state (oh-my-claudecode)
 /.omc
 /.omx
+
+# Design review artifacts (not shipped)
+color-proposal*.html
