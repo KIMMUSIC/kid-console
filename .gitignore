@@ -18,3 +18,4 @@ tsconfig.tsbuildinfo
 
 # Design review artifacts (not shipped)
 color-proposal*.html
+.gstack/
