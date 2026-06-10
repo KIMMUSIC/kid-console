@@ -463,7 +463,18 @@ export default function Console() {
     const ch = upgrade.response?.challenge
     if (!ch) return
     setLoadingStep('upgrade-sim')
-    const age = inputs.age ? Number(inputs.age) : ageFromDob(inputs.dateOfBirth)
+    const base = upgrade.before ?? flow.session
+    const isAgeAssurance = ch.type === 'CHALLENGE_SESSION_UPGRADE_BY_AGE_ASSURANCE'
+    const threshold = base?.permissions.find(
+      (p) => p.name === upgrade.permission,
+    )?.verifiedAgeThreshold
+    // An age-assurance challenge passes on the PLAYER's verified age — use the
+    // permission's threshold; a consent challenge passes on the child's age.
+    const age = isAgeAssurance
+      ? (threshold ?? 18)
+      : inputs.age
+        ? Number(inputs.age)
+        : ageFromDob(inputs.dateOfBirth)
     try {
       const res = await proxyCall(
         '/api/kid/test-set-challenge-status',
@@ -481,26 +492,28 @@ export default function Console() {
         'test/set-challenge-status',
       )
       if (res?.ok) {
-        // A simulated PASS only resolves the challenge — k-ID does not enable
-        // anything by itself. Emulate the parent ticking the requested
-        // permission on the consent page (full-set semantics).
-        const base = upgrade.before ?? flow.session
-        const enabled = (base?.permissions ?? [])
-          .filter((p) => p.managedBy === 'GUARDIAN' && p.enabled)
-          .map((p) => p.name)
-        if (upgrade.permission && !enabled.includes(upgrade.permission)) {
-          enabled.push(upgrade.permission)
-        }
-        if (base?.sessionId) {
-          await proxyCall(
-            '/api/kid/set-guardian-permissions',
-            {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ sessionId: base.sessionId, enabledPermissions: enabled }),
-            },
-            'session/set-guardian-managed-permissions',
-          )
+        // A simulated consent PASS only resolves the challenge — k-ID does not
+        // enable anything by itself. Emulate the parent ticking the requested
+        // permission on the consent page (full-set semantics). Verified-age
+        // permissions are NOT guardian-managed, so skip this for age assurance.
+        if (!isAgeAssurance) {
+          const enabled = (base?.permissions ?? [])
+            .filter((p) => p.managedBy === 'GUARDIAN' && p.enabled)
+            .map((p) => p.name)
+          if (upgrade.permission && !enabled.includes(upgrade.permission)) {
+            enabled.push(upgrade.permission)
+          }
+          if (base?.sessionId) {
+            await proxyCall(
+              '/api/kid/set-guardian-permissions',
+              {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ sessionId: base.sessionId, enabledPermissions: enabled }),
+              },
+              'session/set-guardian-managed-permissions',
+            )
+          }
         }
         setUpgrade((u) => ({ ...u, consentSimulated: true }))
       }

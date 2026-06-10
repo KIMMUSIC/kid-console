@@ -117,6 +117,9 @@ export default function SessionUpgradePanel({
   const isAgeAssurance = challenge?.type === 'CHALLENGE_SESSION_UPGRADE_BY_AGE_ASSURANCE'
   const passed = upgrade.challengeStatus?.status === 'PASS' || Boolean(instantSession)
   const failed = upgrade.challengeStatus?.status === 'FAIL'
+  const requestedThreshold = (upgrade.before ?? session)?.permissions.find(
+    (p) => p.name === upgrade.permission,
+  )?.verifiedAgeThreshold
 
   return (
     <div className="space-y-3">
@@ -211,7 +214,9 @@ export default function SessionUpgradePanel({
             <div className="mt-3 space-y-3 animate-fade-up">
               <div className="flex flex-wrap items-center gap-2">
                 <Badge className="border-challenge/50 bg-challenge/10 text-challenge">
-                  {isAgeAssurance ? 'Age Assurance required' : 'Guardian approval required'}
+                  {isAgeAssurance
+                    ? `Age Assurance required${requestedThreshold ? ` · ${requestedThreshold}+` : ''}`
+                    : 'Guardian approval required'}
                 </Badge>
                 <span className="font-mono text-[11px] text-ink-500">{challenge.type}</span>
                 <span className="font-mono text-[11px] text-ink-500">
@@ -219,12 +224,19 @@ export default function SessionUpgradePanel({
                 </span>
               </div>
 
-              <ChallengeTarget url={challenge.url} otp={challenge.oneTimePassword} otpExpiresAt={challenge.otpExpiresAt} />
+              <ChallengeTarget
+                url={challenge.url}
+                otp={challenge.oneTimePassword}
+                otpExpiresAt={challenge.otpExpiresAt}
+                allowIframe={isAgeAssurance}
+              />
 
               {isAgeAssurance ? (
                 <p className="font-mono text-[11px] text-ink-500">
-                  The player verifies their own age via AgeKit+ at the link above (no parental
-                  consent involved), then the challenge resolves.
+                  The player verifies their OWN age via AgeKit+ (facial estimation, ID…) — no
+                  parental consent involved. On a verified age
+                  {requestedThreshold ? ` of ${requestedThreshold}+` : ''}, k-ID enables the
+                  permission and the challenge resolves.
                 </p>
               ) : (
                 <div className="flex flex-wrap items-center gap-2">
@@ -246,13 +258,17 @@ export default function SessionUpgradePanel({
                 <ActionButton onClick={handlers.onPoll} running={loadingStep === 'upgrade-poll'}>
                   Poll status
                 </ActionButton>
-                {testMode && !isAgeAssurance && (
+                {testMode && (
                   <ActionButton
                     variant="amber"
                     onClick={handlers.onSimulateConsent}
                     running={loadingStep === 'upgrade-sim'}
                   >
-                    {upgrade.consentSimulated ? 'Simulated ✓' : 'Simulate approval'}
+                    {upgrade.consentSimulated
+                      ? 'Simulated ✓'
+                      : isAgeAssurance
+                        ? 'Simulate verification'
+                        : 'Simulate approval'}
                   </ActionButton>
                 )}
                 <span className="font-mono text-[11px] text-ink-500">
@@ -378,11 +394,15 @@ function ChallengeTarget({
   url,
   otp,
   otpExpiresAt,
+  allowIframe,
 }: {
   url?: string
   otp?: string
   otpExpiresAt?: string
+  /** Age-assurance challenges host an AgeKit+ flow the player can run inline. */
+  allowIframe?: boolean
 }) {
+  const [view, setView] = React.useState<'qr' | 'iframe'>('qr')
   const [qr, setQr] = React.useState<string | null>(null)
 
   React.useEffect(() => {
@@ -399,36 +419,89 @@ function ChallengeTarget({
   if (!url && !otp) return null
 
   return (
-    <div className="flex flex-wrap items-center gap-4 rounded-lg border border-ink-700/60 bg-ink-950/40 p-3">
-      {qr && (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img src={qr} alt="QR code for the challenge link" className="h-[132px] w-[132px] rounded-md" />
+    <div className="space-y-3 rounded-lg border border-ink-700/60 bg-ink-950/40 p-3">
+      {allowIframe && url && (
+        <div className="flex gap-1 border-b border-ink-700/70">
+          <TargetTab active={view === 'qr'} onClick={() => setView('qr')}>
+            QR / link
+          </TargetTab>
+          <TargetTab active={view === 'iframe'} onClick={() => setView('iframe')}>
+            iframe
+          </TargetTab>
+        </div>
       )}
-      <div className="min-w-0 space-y-2">
-        {url && (
-          <div className="flex items-center gap-2">
-            <a
-              href={url}
-              target="_blank"
-              rel="noreferrer"
-              className="cursor-pointer font-mono text-[12px] text-action underline-offset-2 transition-colors hover:underline"
-            >
-              open challenge link ↗
-            </a>
-            <CopyButton getText={() => url} />
+
+      {allowIframe && url && view === 'iframe' ? (
+        <div className="animate-fade-up space-y-1">
+          <div className="overflow-hidden rounded-lg border border-ink-700/70 bg-white shadow-product">
+            <iframe
+              title="k-ID AgeKit+ age verification"
+              src={url}
+              className="h-[480px] w-full"
+              allow="camera; microphone; payment; publickey-credentials-get *; publickey-credentials-create *"
+            />
           </div>
-        )}
-        {otp && (
-          <div>
-            <p className="mb-0.5 font-mono text-[11px] text-ink-500">One-time password</p>
-            <p className="font-mono text-lg font-bold tracking-[0.3em] text-challenge">{otp}</p>
-            {otpExpiresAt && (
-              <p className="mt-0.5 font-mono text-[10.5px] text-ink-500">expires {otpExpiresAt}</p>
+          <p className="font-mono text-[11px] text-ink-500">
+            The player verifies in place — then poll status (or let the ⚡webhook resolve it).
+          </p>
+        </div>
+      ) : (
+        <div className="flex flex-wrap items-center gap-4">
+          {qr && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={qr} alt="QR code for the challenge link" className="h-[132px] w-[132px] rounded-md" />
+          )}
+          <div className="min-w-0 space-y-2">
+            {url && (
+              <div className="flex items-center gap-2">
+                <a
+                  href={url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="cursor-pointer font-mono text-[12px] text-action underline-offset-2 transition-colors hover:underline"
+                >
+                  open challenge link ↗
+                </a>
+                <CopyButton getText={() => url} />
+              </div>
+            )}
+            {otp && (
+              <div>
+                <p className="mb-0.5 font-mono text-[11px] text-ink-500">One-time password</p>
+                <p className="font-mono text-lg font-bold tracking-[0.3em] text-challenge">{otp}</p>
+                {otpExpiresAt && (
+                  <p className="mt-0.5 font-mono text-[10.5px] text-ink-500">expires {otpExpiresAt}</p>
+                )}
+              </div>
             )}
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </div>
+  )
+}
+
+function TargetTab({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean
+  onClick: () => void
+  children: React.ReactNode
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`-mb-px cursor-pointer rounded-t-md border-b-2 px-3 py-1.5 font-mono text-[11.5px] transition-colors ${
+        active
+          ? 'border-action text-action'
+          : 'border-transparent text-ink-500 hover:text-ink-200'
+      }`}
+    >
+      {children}
+    </button>
   )
 }
 
