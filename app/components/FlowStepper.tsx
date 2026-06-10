@@ -23,6 +23,8 @@ export interface FlowState {
   ageGate: AgeGateCheckResponse | null
   emailSentTo: string | null
   challengeStatus: ChallengeStatusResponse | null
+  /** How the challenge result arrived: a manual poll or an inbound webhook. */
+  challengeStatusSource?: 'api' | 'webhook'
   session: KidSession | null
   stepError: Record<string, string | undefined>
 }
@@ -261,7 +263,12 @@ export default function FlowStepper({
           onRun={handlers.onPoll}
           onHover={onHoverStep}
         >
-          {state.challengeStatus && <ChallengeStatusResult data={state.challengeStatus} />}
+          {state.challengeStatus && (
+            <ChallengeStatusResult
+              data={state.challengeStatus}
+              viaWebhook={state.challengeStatusSource === 'webhook'}
+            />
+          )}
         </StepCard>
 
         {/* Step 5 — get session */}
@@ -628,12 +635,30 @@ function CheckResult({ data }: { data: AgeGateCheckResponse }) {
   )
 }
 
-function ChallengeStatusResult({ data }: { data: ChallengeStatusResponse }) {
+function ChallengeStatusResult({
+  data,
+  viaWebhook,
+}: {
+  data: ChallengeStatusResponse
+  viaWebhook?: boolean
+}) {
   return (
     <div className="space-y-2 rounded-lg border border-ink-700/60 bg-ink-950/40 p-3">
-      <p className={`font-mono text-base font-bold ${ageGateStatusColor(data.status)}`}>
-        {data.status}
-      </p>
+      <div className="flex items-center gap-2">
+        <p className={`font-mono text-base font-bold ${ageGateStatusColor(data.status)}`}>
+          {data.status}
+        </p>
+        {viaWebhook && (
+          <Badge className="border-action/50 bg-action/10 text-action">
+            ⚡ via Challenge.StateChange webhook
+          </Badge>
+        )}
+      </div>
+      {viaWebhook && (
+        <p className="font-mono text-[11px] text-ink-500">
+          Resolved automatically — k-ID pushed this state change, no poll needed.
+        </p>
+      )}
       {data.approverEmail && <Detail label="approverEmail" value={data.approverEmail} mono />}
       {data.sessionId && <Detail label="sessionId" value={data.sessionId} mono copy />}
       {(data.status === 'PENDING' || data.status === 'IN_PROGRESS') && (

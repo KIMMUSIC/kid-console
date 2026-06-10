@@ -88,6 +88,31 @@ export default function Console() {
       .catch(() => setConfig(null))
   }, [])
 
+  // A Challenge.StateChange webhook for the challenge we're currently driving
+  // resolves step 4 in place — no manual poll needed. Payload shape:
+  // { eventType, data: { id: <challengeId>, status, sessionId?, approverEmail? } }
+  const applyChallengeWebhook = React.useCallback((ev: HttpExchange) => {
+    if (ev.hop !== 'webhook' || ev.response?.ok === false) return
+    const body = ev.request.body as
+      | { eventType?: string; data?: { id?: string; status?: string; sessionId?: string; approverEmail?: string } }
+      | null
+    if (!body || body.eventType !== 'Challenge.StateChange' || !body.data) return
+    const { id, status, sessionId, approverEmail } = body.data
+    if (!id || !status) return
+    setFlow((f) => {
+      if (f.ageGate?.challenge?.challengeId !== id) return f
+      return {
+        ...f,
+        challengeStatus: {
+          status: status as ChallengeStatusResponse['status'],
+          sessionId: sessionId ?? f.challengeStatus?.sessionId,
+          approverEmail: approverEmail ?? f.challengeStatus?.approverEmail,
+        },
+        challengeStatusSource: 'webhook',
+      }
+    })
+  }, [])
+
   // Webhook feed: poll the shared event store. SSE doesn't survive Vercel's
   // serverless split (webhook POST and stream land on different instances),
   // so the inspector pulls instead — works identically in dev and deployed.
@@ -95,6 +120,8 @@ export default function Console() {
     let cursor = -1 // first poll only establishes the server-time cursor
     let stopped = false
     let timer: ReturnType<typeof setTimeout> | undefined
+    // The overlapping cursor can re-deliver events; process each id once.
+    const processed = new Set<string>()
 
     async function poll() {
       if (stopped) return
@@ -107,13 +134,17 @@ export default function Console() {
             // Overlap the cursor window so boundary events can't be missed;
             // re-delivered ones are deduped by exchange id below.
             cursor = json.now - 2000
-            const fresh = json.events ?? []
+            const fresh = (json.events ?? []).filter((e) => !processed.has(e.id))
             if (fresh.length > 0) {
+              fresh.forEach((e) => processed.add(e.id))
               setExchanges((prev) => {
                 const seen = new Set(prev.map((e) => e.id))
                 const next = fresh.filter((e) => !seen.has(e.id))
                 return next.length > 0 ? [...next, ...prev] : prev
               })
+              // fresh is newest-first; apply oldest→newest so the latest
+              // state change ends up in the flow.
+              for (let i = fresh.length - 1; i >= 0; i--) applyChallengeWebhook(fresh[i])
             }
           } else {
             setWebhookLive(false)
@@ -130,7 +161,7 @@ export default function Console() {
       stopped = true
       if (timer) clearTimeout(timer)
     }
-  }, [])
+  }, [applyChallengeWebhook])
 
   function pushHops(hops: HttpExchange[]) {
     if (hops.length > 0) setExchanges((prev) => [...hops, ...prev])
@@ -241,6 +272,7 @@ export default function Console() {
           ageGate: res.data!,
           emailSentTo: null,
           challengeStatus: null,
+          challengeStatusSource: undefined,
           session: null,
           stepError: { ...f.stepError, check: undefined, 'send-email': undefined, poll: undefined, session: undefined },
         }))
@@ -285,7 +317,8 @@ export default function Console() {
         { method: 'GET' },
         'challenge/get-status',
       )
-      if (res?.ok && res.data) setFlow((f) => ({ ...f, challengeStatus: res.data! }))
+      if (res?.ok && res.data)
+        setFlow((f) => ({ ...f, challengeStatus: res.data!, challengeStatusSource: 'api' }))
       else setStepError('poll', res?.error || 'Request failed')
     } finally {
       setLoadingStep(null)
