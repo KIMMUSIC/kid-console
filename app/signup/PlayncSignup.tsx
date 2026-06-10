@@ -1,18 +1,15 @@
 'use client'
 
-// A plaync-look-alike signup experience whose "Guardian Consent" step is powered
-// by the real k-ID API. The flow mirrors the actual plaync signup:
-//   method -> terms -> country + date of birth -> [age-gate/check] -> branch
-// The branch is driven entirely by the live age-gate/check response — exactly the
-// decisions k-ID makes at a signup age gate:
-//   PASS        -> account created
-//   CHALLENGE (CHALLENGE_PARENTAL_CONSENT)        -> VPC guardian-consent flow
-//   CHALLENGE (CHALLENGE_AGE_GATE_AGE_ASSURANCE)  -> hosted age check, session-linked
-//   PROHIBITED  -> blocked (under the minimum age)
-// Both challenge types are session-linked (challengeId -> challenge/get-status ->
-// session/get). The standalone AgeKit+ Access Age Verification product is NOT used
-// here: it returns only a verified age range with no kuid/session, so it can't tie
-// into the account being created. Every hop is captured in the docked HTTP inspector.
+// A plaync-look-alike signup whose age gate is powered by the real k-ID API.
+// Flow:  방법 선택 -> 정보 입력(국가 + 생년월일/나이 + 약관) -> [age-gate/check] -> 분기
+// Branch comes straight from the live age-gate/check response — the decisions k-ID
+// actually makes at a signup age gate, all session-linked:
+//   PASS        -> 계정 생성
+//   CHALLENGE_PARENTAL_CONSENT       -> 보호자 동의(VPC)
+//   CHALLENGE_AGE_GATE_AGE_ASSURANCE -> 호스티드 연령 확인 (challenge.url, 세션 연결)
+//   PROHIBITED  -> 차단
+// The standalone AgeKit+ Access Age Verification product is NOT used (no kuid/session).
+// Every hop is captured in the docked HTTP inspector (kept dark for contrast).
 
 import React from 'react'
 import QRCode from 'qrcode'
@@ -28,37 +25,37 @@ import InspectorPanel from '../components/InspectorPanel'
 import { useKidTraffic, type ChallengeWebhook } from './useKidTraffic'
 import s from './plaync.module.css'
 
-type Step = 'method' | 'terms' | 'input' | 'guardian' | 'ageassurance' | 'done' | 'blocked'
+type Step = 'method' | 'input' | 'guardian' | 'ageassurance' | 'done' | 'blocked'
+type AgeMode = 'dob' | 'slider'
 
 const COUNTRIES: [string, string][] = [
-  ['KR', 'Korea, Republic of (KR)'],
-  ['US-CA', 'United States — California (US-CA)'],
-  ['US', 'United States (US)'],
-  ['GB', 'United Kingdom (GB)'],
-  ['DE', 'Germany (DE)'],
-  ['FR', 'France (FR)'],
-  ['AU', 'Australia (AU)'],
-  ['JP', 'Japan (JP)'],
-  ['BR', 'Brazil (BR)'],
+  ['KR', 'Korea, Republic of'],
+  ['US', 'United States'],
+  ['US-CA', 'United States — California'],
+  ['GB', 'United Kingdom'],
+  ['DE', 'Germany'],
+  ['FR', 'France'],
+  ['AU', 'Australia'],
+  ['BR', 'Brazil'],
+  ['JP', 'Japan'],
 ]
 
-// Convenience presets. The actual branch still comes from the live age-gate/check
-// response — these only prefill the inputs.
-const PRESETS: { label: string; jurisdiction: string; dob: [string, string, string] }[] = [
-  // Adult over the consent age -> age-gate/check returns PASS.
-  { label: 'Adult · PASS', jurisdiction: 'KR', dob: ['2000', '01', '15'] },
-  // Under the consent age -> age-gate/check returns a parental-consent challenge.
-  { label: 'Child · Parental consent', jurisdiction: 'US-CA', dob: ['2015', '06', '10'] },
+// Demo presets. The branch still comes from the live response; presets only prefill
+// the inputs (and the product, since age assurance is configured on product 18887).
+type Preset = { label: string; jurisdiction: string; dob: string; productId?: string }
+const PRESETS: Preset[] = [
+  { label: '성인 · 통과(PASS)', jurisdiction: 'KR', dob: '2000-01-15' },
+  { label: '아동 · 보호자 동의(VPC)', jurisdiction: 'US-CA', dob: '2015-06-10' },
+  { label: '브라질 · 연령확인(Age Assurance)', jurisdiction: 'BR', dob: '2000-01-15', productId: '18887' },
 ]
 
-const YEARS = Array.from({ length: 100 }, (_, i) => String(new Date().getFullYear() - i))
-const MONTHS = Array.from({ length: 12 }, (_, i) => String(i + 1).padStart(2, '0'))
-const DAYS = Array.from({ length: 31 }, (_, i) => String(i + 1).padStart(2, '0'))
+const DOB_RE = /^\d{4}-\d{2}-\d{2}$/
 
 function ageFromDob(dob: string): number {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dob)
+  const m = DOB_RE.exec(dob)
   if (!m) return 0
-  const birth = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
+  const [y, mo, d] = dob.split('-').map(Number)
+  const birth = new Date(y, mo - 1, d)
   const now = new Date()
   let age = now.getFullYear() - birth.getFullYear()
   const md = now.getMonth() - birth.getMonth()
@@ -69,35 +66,33 @@ function ageFromDob(dob: string): number {
 export default function PlayncSignup() {
   const [step, setStep] = React.useState<Step>('method')
   const [jurisdiction, setJurisdiction] = React.useState('KR')
-  const [year, setYear] = React.useState('2014')
-  const [month, setMonth] = React.useState('03')
-  const [day, setDay] = React.useState('22')
-  const [guardianEmail, setGuardianEmail] = React.useState('parent@example.com')
-  const [agreed, setAgreed] = React.useState({ tos: true, privacy: true, data: true, marketing: false })
+  const [dob, setDob] = React.useState('')
+  const [ageMode, setAgeMode] = React.useState<AgeMode>('dob')
+  const [sliderAge, setSliderAge] = React.useState(20)
+  const [methods, setMethods] = React.useState<string[]>([])
+  const [agree, setAgree] = React.useState({ tos: false, privacy: false })
+  const [showWhy, setShowWhy] = React.useState(false)
 
+  const [guardianEmail, setGuardianEmail] = React.useState('parent@example.com')
   const [ageGate, setAgeGate] = React.useState<AgeGateCheckResponse | null>(null)
   const [challenge, setChallenge] = React.useState<KidChallenge | null>(null)
   const [challengeStatus, setChallengeStatus] = React.useState<ChallengeStatusResponse | null>(null)
   const [session, setSession] = React.useState<KidSession | null>(null)
-  const [loading, setLoading] = React.useState(false)
-  const [error, setError] = React.useState<string | null>(null)
-  const [inspectorOpen, setInspectorOpen] = React.useState(true)
   const [qrDataUrl, setQrDataUrl] = React.useState<string | null>(null)
   const [emailSentTo, setEmailSentTo] = React.useState<string | null>(null)
 
-  const dob = `${year}-${month}-${day}`
+  const [loading, setLoading] = React.useState(false)
+  const [error, setError] = React.useState<string | null>(null)
+  const [inspectorOpen, setInspectorOpen] = React.useState(true)
+
   const challengeIdRef = React.useRef<string | null>(null)
   React.useEffect(() => {
     challengeIdRef.current = challenge?.challengeId ?? null
   }, [challenge])
 
-  // Render the consent URL as a QR the guardian can scan with their phone.
   React.useEffect(() => {
     const url = challenge?.url
-    if (!url) {
-      setQrDataUrl(null)
-      return
-    }
+    if (!url) { setQrDataUrl(null); return }
     let cancelled = false
     QRCode.toDataURL(url, { margin: 1, width: 240 })
       .then((d) => { if (!cancelled) setQrDataUrl(d) })
@@ -105,23 +100,42 @@ export default function PlayncSignup() {
     return () => { cancelled = true }
   }, [challenge?.url])
 
-  // When a Challenge.StateChange webhook resolves our challenge, advance in place.
   const onChallengeWebhook = React.useCallback((ev: ChallengeWebhook) => {
     if (!challengeIdRef.current || ev.challengeId !== challengeIdRef.current) return
     setChallengeStatus({ status: ev.status, sessionId: ev.sessionId, approverEmail: ev.approverEmail })
   }, [])
 
-  const { config, exchanges, clearExchanges, webhookLive, proxyCall } = useKidTraffic(onChallengeWebhook)
+  const { config, productId, setProductId, exchanges, clearExchanges, webhookLive, proxyCall } =
+    useKidTraffic(onChallengeWebhook)
   const testMode = config?.testMode ?? false
+  const defaultProduct = config?.defaultProduct ?? ''
+
+  // Age-collection methods depend on jurisdiction (and product). Fetch the
+  // jurisdiction's requirements whenever the user lands on / edits the input step,
+  // so we know whether to offer date-of-birth, an age slider, or both.
+  React.useEffect(() => {
+    if (step !== 'input' || !productId) return
+    let cancelled = false
+    ;(async () => {
+      const res = await proxyCall<AgeGateRequirements>(
+        `/api/kid/requirements?jurisdiction=${encodeURIComponent(jurisdiction)}`,
+        { method: 'GET' },
+        'age-gate/get-requirements',
+      )
+      if (cancelled) return
+      const m = res?.data?.approvedAgeCollectionMethods ?? []
+      setMethods(m)
+      setAgeMode(m.includes('date-of-birth') ? 'dob' : m.includes('age-slider') ? 'slider' : 'dob')
+    })()
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step, jurisdiction, productId])
 
   // Once the challenge passes (webhook, poll, or simulate), fetch the session and finish.
   React.useEffect(() => {
     if (challengeStatus?.status !== 'PASS') return
     const sessionId = challengeStatus.sessionId ?? ageGate?.session?.sessionId
-    if (!sessionId) {
-      setStep('done')
-      return
-    }
+    if (!sessionId) { setStep('done'); return }
     let cancelled = false
     ;(async () => {
       const res = await proxyCall<KidSession>(
@@ -134,65 +148,53 @@ export default function PlayncSignup() {
         setStep('done')
       }
     })()
-    return () => {
-      cancelled = true
-    }
+    return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [challengeStatus?.status])
 
   function resetFlowState() {
-    setAgeGate(null)
-    setChallenge(null)
-    setChallengeStatus(null)
-    setSession(null)
-    setEmailSentTo(null)
-    setError(null)
+    setAgeGate(null); setChallenge(null); setChallengeStatus(null)
+    setSession(null); setEmailSentTo(null); setError(null)
   }
 
-  // Country + DOB -> requirements (jurisdiction context) + age-gate/check -> branch.
-  // Every outcome here is session-linked; no standalone age-verification product.
+  function applyPreset(p: Preset) {
+    setJurisdiction(p.jurisdiction)
+    setDob(p.dob)
+    setAgeMode('dob')
+    setProductId(p.productId ?? defaultProduct)
+  }
+
+  // available age-collection inputs
+  const hasDob = methods.length === 0 || methods.includes('date-of-birth')
+  const hasSlider = methods.includes('age-slider')
+  const showToggle = hasDob && hasSlider
+  const effMode: AgeMode = showToggle ? ageMode : hasSlider && !hasDob ? 'slider' : 'dob'
+  const ageInputValid = effMode === 'slider' ? sliderAge > 0 : DOB_RE.test(dob)
+  const canSubmit = agree.tos && agree.privacy && ageInputValid && !loading
+
   async function runAgeGate() {
-    setLoading(true)
-    setError(null)
-    resetFlowState()
+    setLoading(true); setError(null); resetFlowState()
+    const body: Record<string, unknown> =
+      effMode === 'slider' ? { jurisdiction, age: sliderAge } : { jurisdiction, dateOfBirth: dob }
     try {
-      // Informational: jurisdiction rules (consent age, etc.) show in the inspector.
-      await proxyCall<AgeGateRequirements>(
-        `/api/kid/requirements?jurisdiction=${encodeURIComponent(jurisdiction)}`,
-        { method: 'GET' },
-        'age-gate/get-requirements',
-      )
       const res = await proxyCall<AgeGateCheckResponse>(
         '/api/kid/age-gate-check',
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ jurisdiction, dateOfBirth: dob }),
-        },
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) },
         'age-gate/check',
       )
-      if (!res?.ok || !res.data) {
-        setError(res?.error || 'Age check failed. Please try again.')
-        return
-      }
+      if (!res?.ok || !res.data) { setError(res?.error || '연령 확인에 실패했어요. 다시 시도해 주세요.'); return }
       const data = res.data
       setAgeGate(data)
       if (data.status === 'CHALLENGE' && data.challenge) {
-        // Both challenge types are session-linked and resolve via challenge/get-status:
-        // parental consent (VPC) or a hosted age-gate age-assurance check.
         setChallenge(data.challenge)
-        if (data.challenge.type === 'CHALLENGE_AGE_GATE_AGE_ASSURANCE') {
-          setStep('ageassurance')
-        } else {
-          setStep('guardian')
-        }
+        setStep(data.challenge.type === 'CHALLENGE_AGE_GATE_AGE_ASSURANCE' ? 'ageassurance' : 'guardian')
       } else if (data.status === 'PROHIBITED') {
         setStep('blocked')
       } else if (data.status === 'PASS') {
         if (data.session) setSession(data.session)
         setStep('done')
       } else {
-        setError('Unexpected response from age check.')
+        setError('연령 확인 응답이 올바르지 않습니다.')
       }
     } finally {
       setLoading(false)
@@ -201,29 +203,22 @@ export default function PlayncSignup() {
 
   async function sendConsentEmail() {
     if (!challenge?.challengeId) return
-    setLoading(true)
-    setError(null)
+    setLoading(true); setError(null)
     try {
       const res = await proxyCall<SendEmailResponse>(
         '/api/kid/send-email',
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ challengeId: challenge.challengeId, email: guardianEmail, locale: 'en-US' }),
-        },
+        { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ challengeId: challenge.challengeId, email: guardianEmail, locale: 'ko-KR' }) },
         'challenge/send-email',
       )
       if (res?.ok) setEmailSentTo(guardianEmail)
-      else setError(res?.error || 'Could not send the consent request.')
-    } finally {
-      setLoading(false)
-    }
+      else setError(res?.error || '동의 요청을 보내지 못했어요.')
+    } finally { setLoading(false) }
   }
 
   async function pollStatus() {
     if (!challenge?.challengeId) return
-    setLoading(true)
-    setError(null)
+    setLoading(true); setError(null)
     try {
       const res = await proxyCall<ChallengeStatusResponse>(
         `/api/kid/challenge-status?challengeId=${encodeURIComponent(challenge.challengeId)}`,
@@ -231,109 +226,274 @@ export default function PlayncSignup() {
         'challenge/get-status',
       )
       if (res?.ok && res.data) setChallengeStatus(res.data)
-      else setError(res?.error || 'Could not check status.')
-    } finally {
-      setLoading(false)
-    }
+      else setError(res?.error || '상태를 확인하지 못했어요.')
+    } finally { setLoading(false) }
   }
 
-  // TEST-mode only: resolve the challenge without a real parent / hosted check.
+  // TEST 모드: 실제 부모/사용자 없이 챌린지를 통과 처리.
   async function simulateApproval() {
     if (!challenge?.challengeId) return
-    setLoading(true)
-    setError(null)
-    const isAgeAssurance = challenge.type === 'CHALLENGE_AGE_GATE_AGE_ASSURANCE'
-    const age = isAgeAssurance ? 18 : ageFromDob(dob)
+    setLoading(true); setError(null)
+    const isAA = challenge.type === 'CHALLENGE_AGE_GATE_AGE_ASSURANCE'
+    const age = isAA ? (effMode === 'slider' ? sliderAge : ageFromDob(dob) || 20) : ageFromDob(dob)
     try {
       const res = await proxyCall(
         '/api/kid/test-set-challenge-status',
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            challengeId: challenge.challengeId,
-            status: 'PASS',
-            age,
-            jurisdiction,
-            approverEmail: guardianEmail || 'parent@example.com',
-          }),
-        },
+        { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ challengeId: challenge.challengeId, status: 'PASS', age, jurisdiction,
+            approverEmail: guardianEmail || 'parent@example.com' }) },
         'test/set-challenge-status',
       )
-      if (res?.ok) {
-        // Re-read the real status so the inspector shows the PASS transition;
-        // the session-fetch effect then advances to the result screen.
-        await pollStatus()
-      } else {
-        setError(res?.error || 'Could not simulate approval.')
-      }
-    } finally {
-      setLoading(false)
+      if (res?.ok) await pollStatus()
+      else setError(res?.error || '시뮬레이션에 실패했어요.')
+    } finally { setLoading(false) }
+  }
+
+  function goBack() {
+    if (step === 'input') setStep('method')
+    else if (step === 'guardian' || step === 'ageassurance' || step === 'blocked') {
+      resetFlowState(); setStep('input')
     }
   }
-
-  function restart() {
-    resetFlowState()
-    setStep('method')
-  }
-
-  const stepIndex: Record<Step, number> = {
-    method: 0, terms: 1, input: 2, guardian: 3, ageassurance: 3, done: 4, blocked: 3,
-  }
+  function restart() { resetFlowState(); setStep('method') }
 
   return (
     <div className={s.shell}>
       <div className={s.main}>
         <header className={s.header}>
-          <a className={s.back} href="/" title="Back to k-ID Console">
+          <a className={s.back} href="/" title="k-ID 콘솔로 돌아가기">
             <svg width="14" height="14" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
               <path fillRule="evenodd" d="M12.79 5.23a.75.75 0 01-.02 1.06L9.06 10l3.71 3.71a.75.75 0 11-1.04 1.08l-4.25-4.25a.75.75 0 010-1.08l4.25-4.25a.75.75 0 011.06.02z" clipRule="evenodd" />
             </svg>
-            Console
+            콘솔
           </a>
           <span className={s.logo}>nc</span>
         </header>
 
         <div className={s.content}>
-          {step !== 'method' && <Rail current={stepIndex[step]} />}
+          {/* ── 방법 선택 ── */}
+          {step === 'method' && (
+            <div className={s.col}>
+              <h1 className={s.h1}>회원가입</h1>
+              <p className={s.sub}>회원가입 수단을 선택해 주세요.</p>
+              <button className={s.method} onClick={() => setStep('input')}>
+                <span className={s.mIcon} style={{ color: '#0a2a52' }}>nc</span> 이메일로 회원가입
+              </button>
+            </div>
+          )}
 
-          {step === 'method' && <MethodStep onPick={() => setStep('terms')} />}
-          {step === 'terms' && (
-            <TermsStep agreed={agreed} setAgreed={setAgreed} onContinue={() => setStep('input')} />
-          )}
+          {/* ── 정보 입력 (국가 + 생년월일/나이 + 약관) ── */}
           {step === 'input' && (
-            <InputStep
-              jurisdiction={jurisdiction}
-              setJurisdiction={setJurisdiction}
-              year={year} month={month} day={day}
-              setYear={setYear} setMonth={setMonth} setDay={setDay}
-              loading={loading} error={error}
-              onPreset={(p) => { setJurisdiction(p.jurisdiction); setYear(p.dob[0]); setMonth(p.dob[1]); setDay(p.dob[2]) }}
-              onNext={runAgeGate}
-            />
+            <div className={s.col}>
+              <button className={s.stepBack} onClick={goBack}>‹ 이전</button>
+              <h1 className={s.h1}>회원가입</h1>
+              <p className={s.sub}>서비스 이용을 위해 다음 정보를 입력해 주세요.</p>
+
+              <div className={s.presets}>
+                <span className={s.presetLabel}>데모 프리셋</span>
+                {PRESETS.map((p) => (
+                  <button key={p.label} className={s.preset} onClick={() => applyPreset(p)}>{p.label}</button>
+                ))}
+              </div>
+
+              <div className={s.lab}>현재 위치 및 생년월일</div>
+              <select className={s.field} value={jurisdiction} onChange={(e) => setJurisdiction(e.target.value)}>
+                {COUNTRIES.map(([code, name]) => <option key={code} value={code}>{name}</option>)}
+              </select>
+
+              <div style={{ height: 10 }} />
+
+              {showToggle && (
+                <div className={s.collToggle}>
+                  <button className={`${s.collTab} ${effMode === 'dob' ? s.collTabOn : ''}`} onClick={() => setAgeMode('dob')}>생년월일</button>
+                  <button className={`${s.collTab} ${effMode === 'slider' ? s.collTabOn : ''}`} onClick={() => setAgeMode('slider')}>나이 입력</button>
+                </div>
+              )}
+
+              {effMode === 'dob' ? (
+                <input
+                  className={s.field}
+                  value={dob}
+                  onChange={(e) => setDob(e.target.value)}
+                  placeholder="생년월일 (YYYY-MM-DD)"
+                  inputMode="numeric"
+                />
+              ) : (
+                <div className={s.sliderWrap}>
+                  <div className={s.sliderTop}>
+                    <span className={s.sliderVal}>{sliderAge}<span className={s.sliderUnit}> 세</span></span>
+                    <span className={s.sliderUnit}>나이 슬라이더</span>
+                  </div>
+                  <input className={s.slider} type="range" min={0} max={100} value={sliderAge}
+                    onChange={(e) => setSliderAge(Number(e.target.value))} />
+                </div>
+              )}
+              {showToggle && (
+                <p className={s.mDesc} style={{ marginTop: 8 }}>
+                  이 지역은 생년월일과 나이 입력을 모두 지원해요. 원하는 방식을 선택하세요.
+                </p>
+              )}
+
+              <div className={s.consentList}>
+                <div className={s.consentRow}>
+                  <span className={`${s.ck} ${s.ckc} ${agree.tos ? s.ckOn : ''}`} onClick={() => setAgree((a) => ({ ...a, tos: !a.tos }))}>{agree.tos ? '✓' : ''}</span>
+                  <span className={s.req}>(필수)</span> 게임서비스 이용약관 동의
+                  <a className={s.detailLink} style={{ marginLeft: 'auto' }}>자세히 보기 ›</a>
+                </div>
+                <div className={s.consentRow}>
+                  <span className={`${s.ck} ${s.ckc} ${agree.privacy ? s.ckOn : ''}`} onClick={() => setAgree((a) => ({ ...a, privacy: !a.privacy }))}>{agree.privacy ? '✓' : ''}</span>
+                  <span className={s.req}>(필수)</span> 개인정보 수집 및 이용 동의
+                  <a className={s.detailLink} style={{ marginLeft: 'auto' }}>자세히 보기 ›</a>
+                  <span className={s.minorBadge}>아동 청소년용 안내</span>
+                </div>
+              </div>
+
+              {error && <div className={s.errbox}>{error}</div>}
+              <button className={s.btn} disabled={!canSubmit} onClick={runAgeGate}>
+                {loading ? '확인 중…' : '다음'}
+              </button>
+
+              <button className={s.infoToggle} onClick={() => setShowWhy((v) => !v)}>
+                <span className={s.ic}>i</span> 이 정보가 필요한 이유가 궁금하세요?
+                <span className={s.chev}>{showWhy ? '⌃' : '⌄'}</span>
+              </button>
+              {showWhy && (
+                <div className={s.infoBody}>
+                  거주 국가의 법령에 따라 디지털 서비스 이용에 필요한 최소 연령과 보호자 동의 여부가
+                  달라집니다. 입력하신 위치와 생년월일은 연령 확인 목적에만 사용됩니다.
+                </div>
+              )}
+            </div>
           )}
+
+          {/* ── 보호자 동의 (VPC) ── */}
           {step === 'guardian' && (
-            <GuardianStep
-              jurisdiction={jurisdiction}
-              consentUrl={challenge?.url}
-              qrDataUrl={qrDataUrl}
-              otp={challenge?.oneTimePassword}
-              otpExpiresAt={challenge?.otpExpiresAt}
-              email={guardianEmail} setEmail={setGuardianEmail}
-              emailSentTo={emailSentTo}
-              testMode={testMode} loading={loading} error={error}
-              onSend={sendConsentEmail} onPoll={pollStatus} onSimulate={simulateApproval}
-            />
+            <div className={s.col}>
+              <button className={s.stepBack} onClick={goBack}>‹ 이전</button>
+              <h1 className={s.h1}>보호자 동의</h1>
+              <p className={s.sub}>
+                {jurisdiction} 기준 디지털 동의 연령 미만이라, 보호자가 계정 생성을 승인해야 해요.
+                편한 방법을 선택해 주세요.
+              </p>
+              <div className={s.callout}>
+                <span className={s.calloutI}>i</span>
+                <div>보호자가 승인할 때까지 계정은 보류 상태로 유지돼요. 동의 전에는 어떤 개인정보도 공유되지 않습니다.</div>
+              </div>
+
+              <div className={s.methodGrid}>
+                <div className={s.mCard}>
+                  <div className={s.mHead}><span className={s.mTag}>QR</span> 휴대폰으로 스캔</div>
+                  <p className={s.mDesc}>보호자가 휴대폰 카메라로 스캔하면 승인 페이지가 열려요.</p>
+                  <div className={s.qrRow}>
+                    <div className={s.qrBox}>
+                      {qrDataUrl ? <img src={qrDataUrl} alt="동의 QR 코드" />
+                        : <div style={{ fontSize: 11, color: '#b6bbc4', display: 'grid', placeItems: 'center', height: '100%' }}>생성 중…</div>}
+                    </div>
+                    <p className={s.mDesc} style={{ margin: 0 }}>QR을 열면 보호자가 본인 확인 후 동의하는 안전한 k-ID 동의 페이지로 이동해요.</p>
+                  </div>
+                </div>
+
+                <div className={s.mCard}>
+                  <div className={s.mHead}><span className={s.mTag}>LINK</span> 승인 링크 공유</div>
+                  <p className={s.mDesc}>메신저로 보호자에게 이 링크를 보내세요.</p>
+                  <div className={s.linkRow}>
+                    <input className={s.linkInput} readOnly value={challenge?.url ?? ''} />
+                    {challenge?.url && <CopyMini text={challenge.url} />}
+                    {challenge?.url && (
+                      <a className={s.miniBtn} href={challenge.url} target="_blank" rel="noreferrer" style={{ display: 'grid', placeItems: 'center', textDecoration: 'none' }}>열기 ↗</a>
+                    )}
+                  </div>
+                </div>
+
+                {challenge?.oneTimePassword && (
+                  <div className={s.mCard}>
+                    <div className={s.mHead}><span className={s.mTag}>OTP</span> 일회용 코드</div>
+                    <p className={s.mDesc}>보호자가 k-ID 동의 페이지에 입력할 수 있어요.</p>
+                    <div className={s.otpBig}>
+                      <span className={s.code}>{challenge.oneTimePassword}</span>
+                      <CopyMini text={challenge.oneTimePassword} />
+                      {fmtExpiry(challenge.otpExpiresAt) && <span className={s.exp}>{fmtExpiry(challenge.otpExpiresAt)}</span>}
+                    </div>
+                  </div>
+                )}
+
+                <div className={s.mCard}>
+                  <div className={s.mHead}><span className={s.mTag}>EMAIL</span> 이메일로 요청</div>
+                  <p className={s.mDesc}>보호자 이메일로 승인 링크를 보내드려요.</p>
+                  <div className={s.emailRow}>
+                    <input className={s.field} type="email" value={guardianEmail} onChange={(e) => setGuardianEmail(e.target.value)} placeholder="parent@example.com" />
+                    <button className={s.miniBtn} disabled={loading || !guardianEmail} onClick={sendConsentEmail}>{loading ? '전송 중…' : '보내기'}</button>
+                  </div>
+                  {emailSentTo && <div className={s.sent}>✓ {emailSentTo} 으로 전송됨</div>}
+                </div>
+              </div>
+
+              <div className={s.divider} />
+              <div className={s.statusBar}><span className={s.spin} /> 보호자 승인 대기 중…</div>
+              {error && <div className={s.errbox}>{error}</div>}
+              <button className={s.btn} disabled={loading} onClick={pollStatus}>{loading ? '확인 중…' : '보호자가 승인했어요 — 확인'}</button>
+              {testMode && <button className={s.btnAlt} disabled={loading} onClick={simulateApproval}>⚡ 보호자 승인 시뮬레이션 (TEST)</button>}
+              <div className={s.kidNote}><span className={s.dot} /> 보호자 동의는 k-ID로 검증됩니다</div>
+            </div>
           )}
+
+          {/* ── 연령 확인 (Age Assurance) ── */}
           {step === 'ageassurance' && (
-            <AgeAssuranceStep
-              url={challenge?.url}
-              testMode={testMode} loading={loading} error={error}
-              onPoll={pollStatus} onSimulate={simulateApproval}
-            />
+            <div className={s.col}>
+              <button className={s.stepBack} onClick={goBack}>‹ 이전</button>
+              <h1 className={s.h1}>연령 확인</h1>
+              <p className={s.sub}>이 지역은 가입 전 간단한 연령 확인이 필요해요. 아래에서 안전하게 완료해 주세요.</p>
+              {challenge?.url ? (
+                <iframe src={challenge.url} title="연령 확인" style={{ width: '100%', height: 540, border: '1px solid #c6cfd8' }} />
+              ) : (
+                <div className={s.callout}><span className={s.calloutI}>i</span><div>안전한 확인 페이지를 준비 중이에요…</div></div>
+              )}
+              {challenge?.url && (
+                <a href={challenge.url} target="_blank" rel="noreferrer" className={s.btnAlt} style={{ display: 'grid', placeItems: 'center', textDecoration: 'none' }}>새 창에서 열기 ↗</a>
+              )}
+              {error && <div className={s.errbox}>{error}</div>}
+              <button className={s.btn} disabled={loading} onClick={pollStatus}>{loading ? '확인 중…' : '확인을 완료했어요 — 확인'}</button>
+              {testMode && <button className={s.btnAlt} disabled={loading} onClick={simulateApproval}>⚡ 연령 확인 시뮬레이션 (TEST)</button>}
+              <div className={s.kidNote}><span className={s.dot} /> 연령 확인은 k-ID로 처리됩니다</div>
+            </div>
           )}
-          {step === 'done' && <DoneStep session={session} onRestart={restart} />}
-          {step === 'blocked' && <BlockedStep jurisdiction={jurisdiction} onRestart={restart} />}
+
+          {/* ── 완료 ── */}
+          {step === 'done' && (
+            <div className={s.col}>
+              <div className={`${s.bigIcon} ${s.bigPass}`}>✓</div>
+              <h1 className={s.h1}>plaync에 오신 것을 환영합니다</h1>
+              <p className={s.sub}>계정이 준비되었어요. 연령 확인이 완료되었습니다.</p>
+              {session && (
+                <>
+                  <div className={s.lab}>내 계정 권한</div>
+                  <div className={s.permList}>
+                    {session.permissions.slice(0, 8).map((p) => (
+                      <div key={p.name} className={s.permRow}>
+                        {p.name}
+                        <span className={`${s.permState} ${p.enabled ? s.permOn : s.permOff}`}>{p.enabled ? 'ON' : 'OFF'}</span>
+                      </div>
+                    ))}
+                    {session.permissions.length === 0 && (
+                      <div className={s.permRow} style={{ color: '#9aa0aa' }}>반환된 관리 권한이 없습니다.</div>
+                    )}
+                  </div>
+                </>
+              )}
+              <button className={s.btnAlt} onClick={restart} style={{ marginTop: 24 }}>처음으로</button>
+            </div>
+          )}
+
+          {/* ── 차단 ── */}
+          {step === 'blocked' && (
+            <div className={s.col}>
+              <button className={s.stepBack} onClick={goBack}>‹ 이전</button>
+              <div className={`${s.bigIcon} ${s.bigBlock}`}>✕</div>
+              <h1 className={s.h1}>가입할 수 없습니다</h1>
+              <p className={s.sub}>입력하신 생년월일 기준 {jurisdiction} 지역의 최소 가입 연령에 미치지 못해요.</p>
+              <button className={s.btnAlt} onClick={restart} style={{ marginTop: 8 }}>처음으로</button>
+            </div>
+          )}
         </div>
 
         <Footer />
@@ -347,26 +507,19 @@ export default function PlayncSignup() {
                 {webhookLive ? '● webhook live' : '○ webhook'}
               </span>
               {testMode && (
-                <span className="rounded-full border border-pending/40 bg-pending/10 px-2 py-0.5 font-mono text-[10px] text-pending">
-                  TEST MODE
-                </span>
+                <span className="rounded-full border border-pending/40 bg-pending/10 px-2 py-0.5 font-mono text-[10px] text-pending">TEST MODE</span>
               )}
-              <button
-                type="button"
-                onClick={() => setInspectorOpen(false)}
-                className="ml-auto cursor-pointer rounded-full border border-ink-700 px-2 py-0.5 font-mono text-[11px] text-ink-300 hover:border-action/50 hover:text-action"
-              >
-                Hide ›
-              </button>
+              {productId && (
+                <span className="rounded-full border border-ink-700 bg-ink-900/60 px-2 py-0.5 font-mono text-[10px] text-ink-400">product {productId}</span>
+              )}
+              <button type="button" onClick={() => setInspectorOpen(false)} className="ml-auto cursor-pointer rounded-full border border-ink-700 px-2 py-0.5 font-mono text-[11px] text-ink-300 hover:border-action/50 hover:text-action">Hide ›</button>
             </div>
             <div className="min-h-0 flex-1">
               <InspectorPanel exchanges={exchanges} onClear={clearExchanges} />
             </div>
           </div>
         ) : (
-          <button type="button" className={s.reopen} onClick={() => setInspectorOpen(true)}>
-            ‹ HTTP Inspector ({exchanges.length})
-          </button>
+          <button type="button" className={s.reopen} onClick={() => setInspectorOpen(true)}>‹ HTTP Inspector ({exchanges.length})</button>
         )}
       </div>
 
@@ -375,159 +528,12 @@ export default function PlayncSignup() {
   )
 }
 
-// ── step rail ────────────────────────────────────────────────────────────────
-
-function Rail({ current }: { current: number }) {
-  // 4 visible nodes: Terms · Info · Verify · Done (method step hides the rail).
-  const nodes = [1, 2, 3, 4]
-  return (
-    <div className={s.rail}>
-      {nodes.map((n, i) => {
-        const done = current > n
-        const on = current === n
-        return (
-          <React.Fragment key={n}>
-            <span className={`${s.node} ${done ? s.nodeDone : on ? s.nodeOn : ''}`}>
-              {done ? '✓' : n}
-            </span>
-            {i < nodes.length - 1 && <span className={`${s.bar} ${current > n ? s.barDone : ''}`} />}
-          </React.Fragment>
-        )
-      })}
-    </div>
-  )
-}
-
-// ── steps ──────────────────────────────────────────────────────────────────
-
-function MethodStep({ onPick }: { onPick: () => void }) {
-  const socials = ['Google', 'Facebook', 'Apple', 'Twitter', 'LINE', 'Steam', 'PlayStation', 'Xbox']
-  return (
-    <div className={s.col}>
-      <h1 className={s.h1}>Sign Up</h1>
-      <p className={s.sub}>Select the method of sign-up.</p>
-      <button className={s.method} onClick={onPick}>
-        <span className={s.mIcon} style={{ color: '#0a2a52' }}>nc</span> Sign-up with e-mail address
-      </button>
-      <button className={s.method} onClick={onPick}>
-        <span className={s.mIcon}>☎</span> Sign-up with Phone Number
-      </button>
-      <div className={s.orline}>or</div>
-      {socials.map((p) => (
-        <button key={p} className={s.method} onClick={onPick}>
-          <span className={s.mIcon}>{p[0]}</span> Sign-up with {p}
-        </button>
-      ))}
-    </div>
-  )
-}
-
-function TermsStep({
-  agreed, setAgreed, onContinue,
-}: {
-  agreed: { tos: boolean; privacy: boolean; data: boolean; marketing: boolean }
-  setAgreed: React.Dispatch<React.SetStateAction<{ tos: boolean; privacy: boolean; data: boolean; marketing: boolean }>>
-  onContinue: () => void
-}) {
-  const allRequired = agreed.tos && agreed.privacy && agreed.data
-  const all = allRequired && agreed.marketing
-  const toggleAll = () => {
-    const next = !all
-    setAgreed({ tos: next, privacy: next, data: next, marketing: next })
-  }
-  const Row = ({ k, label, required }: { k: keyof typeof agreed; label: string; required?: boolean }) => (
-    <div className={s.termsRow} onClick={() => setAgreed((a) => ({ ...a, [k]: !a[k] }))}>
-      <span className={`${s.ck} ${agreed[k] ? s.ckOn : ''}`}>{agreed[k] ? '✓' : ''}</span>
-      <span className={required ? s.req : s.opt}>[{required ? 'Required' : 'Optional'}]</span> {label}
-      <span className={s.arrow}>›</span>
-    </div>
-  )
-  return (
-    <div className={s.col}>
-      <h1 className={s.h1}>Sign Up</h1>
-      <p className={s.sub}>Please agree to the terms to create your plaync account.</p>
-      <div className={s.terms}>
-        <div className={s.termsAll} onClick={toggleAll}>
-          <span className={`${s.ck} ${all ? s.ckAll : ''}`}>{all ? '✓' : ''}</span> Agree to all
-        </div>
-        <Row k="tos" label="Terms of Service" required />
-        <Row k="privacy" label="Privacy Policy" required />
-        <Row k="data" label="Collection & use of personal data" required />
-        <Row k="marketing" label="Receive marketing e-mails" />
-      </div>
-      <button className={s.btn} disabled={!allRequired} onClick={onContinue}>
-        Agree &amp; Continue
-      </button>
-    </div>
-  )
-}
-
-function InputStep({
-  jurisdiction, setJurisdiction, year, month, day, setYear, setMonth, setDay,
-  loading, error, onPreset, onNext,
-}: {
-  jurisdiction: string
-  setJurisdiction: (v: string) => void
-  year: string; month: string; day: string
-  setYear: (v: string) => void; setMonth: (v: string) => void; setDay: (v: string) => void
-  loading: boolean; error: string | null
-  onPreset: (p: (typeof PRESETS)[number]) => void
-  onNext: () => void
-}) {
-  return (
-    <div className={s.col}>
-      <h1 className={s.h1}>Sign Up</h1>
-      <p className={s.sub}>Select your country and date of birth.</p>
-
-      <div className={s.presets}>
-        <span className={s.presetLabel}>Demo presets</span>
-        {PRESETS.map((p) => (
-          <button key={p.label} className={s.preset} onClick={() => onPreset(p)}>{p.label}</button>
-        ))}
-      </div>
-
-      <div className={s.lab}>Country / Region</div>
-      <select className={s.field} value={jurisdiction} onChange={(e) => setJurisdiction(e.target.value)}>
-        {COUNTRIES.map(([code, name]) => <option key={code} value={code}>{name}</option>)}
-      </select>
-
-      <div className={s.lab}>Date of birth</div>
-      <div className={s.dob}>
-        <select className={s.field} value={year} onChange={(e) => setYear(e.target.value)}>
-          {YEARS.map((y) => <option key={y} value={y}>{y}</option>)}
-        </select>
-        <select className={s.field} value={month} onChange={(e) => setMonth(e.target.value)}>
-          {MONTHS.map((m) => <option key={m} value={m}>{m}</option>)}
-        </select>
-        <select className={s.field} value={day} onChange={(e) => setDay(e.target.value)}>
-          {DAYS.map((d) => <option key={d} value={d}>{d}</option>)}
-        </select>
-      </div>
-
-      {error && <div className={s.errbox}>{error}</div>}
-      <button className={s.btn} disabled={loading} onClick={onNext}>
-        {loading ? 'Checking…' : 'Next'}
-      </button>
-    </div>
-  )
-}
-
-function CopyMini({ text, label = 'Copy' }: { text: string; label?: string }) {
+function CopyMini({ text, label = '복사' }: { text: string; label?: string }) {
   const [copied, setCopied] = React.useState(false)
   return (
-    <button
-      type="button"
-      className={s.miniBtn}
-      onClick={async () => {
-        try {
-          await navigator.clipboard.writeText(text)
-          setCopied(true)
-          setTimeout(() => setCopied(false), 1200)
-        } catch { /* clipboard unavailable */ }
-      }}
-    >
-      {copied ? 'Copied ✓' : label}
-    </button>
+    <button type="button" className={s.miniBtn} onClick={async () => {
+      try { await navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 1200) } catch { /* clipboard unavailable */ }
+    }}>{copied ? '복사됨 ✓' : label}</button>
   )
 }
 
@@ -535,210 +541,19 @@ function fmtExpiry(iso?: string): string | null {
   if (!iso) return null
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return null
-  return `expires ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
-}
-
-// One screen exposing EVERY way a guardian can approve: scan a QR, open/copy the
-// consent link, read the OTP aloud, or have it emailed — plus the live approval
-// status (webhook/poll/simulate). All come from the same parental-consent challenge.
-function GuardianStep({
-  jurisdiction, consentUrl, qrDataUrl, otp, otpExpiresAt,
-  email, setEmail, emailSentTo, testMode, loading, error,
-  onSend, onPoll, onSimulate,
-}: {
-  jurisdiction: string
-  consentUrl?: string
-  qrDataUrl: string | null
-  otp?: string
-  otpExpiresAt?: string
-  email: string; setEmail: (v: string) => void
-  emailSentTo: string | null
-  testMode: boolean; loading: boolean; error: string | null
-  onSend: () => void; onPoll: () => void; onSimulate: () => void
-}) {
-  const exp = fmtExpiry(otpExpiresAt)
-  return (
-    <div className={s.col}>
-      <h1 className={s.h1}>Guardian Consent</h1>
-      <p className={s.sub}>
-        You&apos;re under the digital consent age in {jurisdiction}, so a parent or
-        guardian must approve your account. Use whichever option is easiest for them.
-      </p>
-      <div className={s.callout}>
-        <span className={s.calloutI}>i</span>
-        <div>Your account stays on hold until a guardian approves. No personal data is shared until consent is granted.</div>
-      </div>
-
-      <div className={s.methodGrid}>
-        {/* QR */}
-        <div className={s.mCard}>
-          <div className={s.mHead}><span className={s.mTag}>QR</span> Scan with a phone</div>
-          <p className={s.mDesc}>Have your guardian scan this with their phone camera to open the approval page.</p>
-          <div className={s.qrRow}>
-            <div className={s.qrBox}>
-              {qrDataUrl
-                ? <img src={qrDataUrl} alt="Consent QR code" />
-                : <div style={{ fontSize: 11, color: '#b6bbc4', display: 'grid', placeItems: 'center', height: '100%' }}>Generating…</div>}
-            </div>
-            <p className={s.mDesc} style={{ margin: 0 }}>
-              The QR opens the secure k-ID consent page where your guardian confirms their identity and approves.
-            </p>
-          </div>
-        </div>
-
-        {/* Link */}
-        <div className={s.mCard}>
-          <div className={s.mHead}><span className={s.mTag}>LINK</span> Share the approval link</div>
-          <p className={s.mDesc}>Send this link to your guardian through any messenger.</p>
-          <div className={s.linkRow}>
-            <input className={s.linkInput} readOnly value={consentUrl ?? ''} />
-            {consentUrl && <CopyMini text={consentUrl} />}
-            {consentUrl && (
-              <a className={s.miniBtn} href={consentUrl} target="_blank" rel="noreferrer" style={{ display: 'grid', placeItems: 'center', textDecoration: 'none' }}>Open ↗</a>
-            )}
-          </div>
-        </div>
-
-        {/* OTP */}
-        {otp && (
-          <div className={s.mCard}>
-            <div className={s.mHead}><span className={s.mTag}>OTP</span> One-time code</div>
-            <p className={s.mDesc}>Your guardian can enter this code on the k-ID consent page.</p>
-            <div className={s.otpBig}>
-              <span className={s.code}>{otp}</span>
-              <CopyMini text={otp} />
-              {exp && <span className={s.exp}>{exp}</span>}
-            </div>
-          </div>
-        )}
-
-        {/* Email */}
-        <div className={s.mCard}>
-          <div className={s.mHead}><span className={s.mTag}>EMAIL</span> Email the request</div>
-          <p className={s.mDesc}>We&apos;ll email the approval link straight to your guardian.</p>
-          <div className={s.emailRow}>
-            <input className={s.field} type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="parent@example.com" />
-            <button className={s.miniBtn} disabled={loading || !email} onClick={onSend}>
-              {loading ? 'Sending…' : 'Send'}
-            </button>
-          </div>
-          {emailSentTo && <div className={s.sent}>✓ Sent to {emailSentTo}</div>}
-        </div>
-      </div>
-
-      <div className={s.divider} />
-
-      <div className={s.statusBar}><span className={s.spin} /> Waiting for guardian approval…</div>
-      {error && <div className={s.errbox}>{error}</div>}
-      <button className={s.btn} disabled={loading} onClick={onPoll}>
-        {loading ? 'Checking…' : 'My guardian approved — check now'}
-      </button>
-      {testMode && (
-        <button className={s.btnAlt} disabled={loading} onClick={onSimulate}>
-          ⚡ Simulate guardian approval (TEST)
-        </button>
-      )}
-      <div className={s.kidNote}><span className={s.dot} /> Parental consent verified by k-ID</div>
-    </div>
-  )
-}
-
-function AgeAssuranceStep({
-  url, testMode, loading, error, onPoll, onSimulate,
-}: {
-  url?: string; testMode: boolean; loading: boolean; error: string | null
-  onPoll: () => void; onSimulate: () => void
-}) {
-  const openUrl = url
-  return (
-    <div className={s.col}>
-      <h1 className={s.h1}>Verify your age</h1>
-      <p className={s.sub}>
-        Your region requires a quick age check before you can continue.<br />
-        Complete the secure verification below.
-      </p>
-      {url ? (
-        <iframe
-          src={url}
-          title="Age verification"
-          style={{ width: '100%', height: 380, border: '1px solid #c6cfd8' }}
-        />
-      ) : (
-        <div className={s.callout}><span className={s.calloutI}>i</span><div>Preparing secure verification…</div></div>
-      )}
-      {openUrl && (
-        <a href={openUrl} target="_blank" rel="noreferrer" className={s.btnAlt} style={{ display: 'grid', placeItems: 'center', textDecoration: 'none' }}>
-          Open in a new window ↗
-        </a>
-      )}
-      {error && <div className={s.errbox}>{error}</div>}
-      <button className={s.btn} disabled={loading} onClick={onPoll}>
-        {loading ? 'Checking…' : 'I’ve finished — check now'}
-      </button>
-      {testMode && (
-        <button className={s.btnAlt} disabled={loading} onClick={onSimulate}>
-          ⚡ Simulate successful verification (TEST)
-        </button>
-      )}
-      <div className={s.kidNote}><span className={s.dot} /> Age assurance by k-ID</div>
-    </div>
-  )
-}
-
-function DoneStep({ session, onRestart }: { session: KidSession | null; onRestart: () => void }) {
-  return (
-    <div className={s.col}>
-      <div className={`${s.bigIcon} ${s.bigPass}`}>✓</div>
-      <h1 className={s.h1}>Welcome to plaync</h1>
-      <p className={s.sub}>Your account is ready. Age verification is complete.</p>
-      {session && (
-        <>
-          <div className={s.lab}>Your account permissions</div>
-          <div className={s.permList}>
-            {session.permissions.slice(0, 8).map((p) => (
-              <div key={p.name} className={s.permRow}>
-                {p.name}
-                <span className={`${s.permState} ${p.enabled ? s.permOn : s.permOff}`}>
-                  {p.enabled ? 'ON' : 'OFF'}
-                </span>
-              </div>
-            ))}
-            {session.permissions.length === 0 && (
-              <div className={s.permRow} style={{ color: '#9aa0aa' }}>No managed permissions returned.</div>
-            )}
-          </div>
-        </>
-      )}
-      <button className={s.btnAlt} onClick={onRestart} style={{ marginTop: 24 }}>Start over</button>
-    </div>
-  )
-}
-
-function BlockedStep({ jurisdiction, onRestart }: { jurisdiction: string; onRestart: () => void }) {
-  return (
-    <div className={s.col}>
-      <div className={`${s.bigIcon} ${s.bigBlock}`}>✕</div>
-      <h1 className={s.h1}>Sign-up unavailable</h1>
-      <p className={s.sub}>
-        We&apos;re sorry — based on your date of birth, you don&apos;t meet the minimum age
-        to create an account in {jurisdiction}.
-      </p>
-      <button className={s.btnAlt} onClick={onRestart} style={{ marginTop: 8 }}>Back to start</button>
-    </div>
-  )
+  return `만료 ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
 function Footer() {
   return (
     <div className={s.foot}>
-      <select defaultValue="English"><option>English</option></select>
+      <select defaultValue="ko"><option value="ko">한국어</option></select>
       <div className={s.footLinks}>
-        <a>Company Information</a><a><b>Privacy Policy</b></a><a>Operation Policy</a>
-        <a>Right of data subjects</a><a>Cookie Policy</a><a>SUPPORT</a>
+        <a>회사소개</a><a>이용약관</a><a><b>개인정보처리방침</b></a>
+        <a><b>청소년 보호정책</b></a><a>운영정책</a><a>정보주체의 권리보장</a><a>고객지원</a>
       </div>
       <div className={s.footCorp}>
-        Company name NC Corporation · Co-CEO Kim Taek-Jin, Park Byung-Moo · Business Registration
-        Number 220-81-43000 · © NC Corporation. All Rights Reserved.
+        (주)엔씨소프트 · 대표 김택진, 박병무 · 사업자등록번호 220-81-43000 · © NC Corporation. All Rights Reserved.
       </div>
     </div>
   )

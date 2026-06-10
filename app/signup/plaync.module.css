@@ -330,6 +330,99 @@ select.field {
   background: #1a7f37;
 }
 
+/* per-step back (previous step) — left of the card content, on every step */
+.stepBack {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0 0 14px;
+  color: #9398aa;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+}
+.stepBack:hover { color: #004c98; }
+
+/* age-collection method toggle (생년월일 / 나이) */
+.collToggle {
+  display: flex;
+  border: 1px solid #c6cfd8;
+  margin-bottom: 10px;
+}
+.collTab {
+  flex: 1;
+  height: 40px;
+  background: #fff;
+  border: none;
+  font-size: 13px;
+  color: #7b818c;
+  cursor: pointer;
+  font-family: inherit;
+}
+.collTab + .collTab { border-left: 1px solid #c6cfd8; }
+.collTabOn { background: #004c98; color: #fff; font-weight: 600; }
+
+/* age slider */
+.sliderWrap { padding: 6px 2px 2px; }
+.sliderTop {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 8px;
+}
+.sliderVal { font: 700 22px ui-monospace, monospace; color: #004c98; }
+.sliderUnit { font-size: 12px; color: #9398aa; }
+.slider { width: 100%; accent-color: #004c98; }
+
+/* consent rows (on the input page) */
+.consentList { margin-top: 20px; display: flex; flex-direction: column; gap: 12px; }
+.consentRow { display: flex; align-items: center; gap: 10px; font-size: 13.5px; color: #4a4f59; }
+.consentRow .ckc { cursor: pointer; }
+.detailLink { color: #9398aa; font-size: 12.5px; text-decoration: none; white-space: nowrap; }
+.detailLink:hover { color: #004c98; }
+.minorBadge {
+  border: 1px solid #5b6cff;
+  color: #4a4fd6;
+  border-radius: 4px;
+  padding: 2px 7px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* "why do we need this?" expander */
+.infoToggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: none;
+  border: none;
+  padding: 0;
+  margin-top: 22px;
+  color: #7b818c;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  width: 100%;
+}
+.infoToggle .ic {
+  width: 18px; height: 18px; border-radius: 50%;
+  background: #c6cfd8; color: #fff; display: grid; place-items: center;
+  font-size: 11px; font-weight: 700; flex: none;
+}
+.infoToggle .chev { margin-left: auto; color: #b6bbc4; }
+.infoBody {
+  margin-top: 10px;
+  font-size: 12.5px;
+  color: #7b818c;
+  line-height: 1.6;
+  background: #f7f9fb;
+  border: 1px solid #eef1f4;
+  padding: 12px 14px;
+}
+
 /* consent methods (guardian step) */
 .methodGrid {
   display: flex;
