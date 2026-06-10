@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
-import { broadcastWebhook } from './connections'
+import { appendEvent } from '@/lib/webhookStore'
 import type { HttpExchange } from '@/lib/types'
 
 export const dynamic = 'force-dynamic'
@@ -88,7 +88,13 @@ async function handle(req: NextRequest, method: string) {
     durationMs: Date.now() - startedAtMs,
   }
 
-  broadcastWebhook(exchange)
+  // Store for the inspector's polling feed. A store failure must not turn into
+  // a webhook NACK — k-ID already got its answer via the signature check.
+  try {
+    await appendEvent(exchange)
+  } catch (err) {
+    console.error('[webhook] failed to store event:', err)
+  }
 
   if (rejected) {
     return NextResponse.json(

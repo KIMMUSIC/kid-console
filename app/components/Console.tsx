@@ -55,7 +55,7 @@ export default function Console() {
   const [config, setConfig] = React.useState<KidConfig | null>(null)
   const [exchanges, setExchanges] = React.useState<HttpExchange[]>([])
   const [loadingStep, setLoadingStep] = React.useState<string | null>(null)
-  const [sseConnected, setSseConnected] = React.useState(false)
+  const [webhookLive, setWebhookLive] = React.useState(false)
   const [activeFlow, setActiveFlow] = React.useState<ActiveFlow>('access')
   const [productId, setProductId] = React.useState<string>('')
   // Linked highlight: hovering a flow step highlights its HTTP exchange(s).
@@ -88,19 +88,48 @@ export default function Console() {
       .catch(() => setConfig(null))
   }, [])
 
+  // Webhook feed: poll the shared event store. SSE doesn't survive Vercel's
+  // serverless split (webhook POST and stream land on different instances),
+  // so the inspector pulls instead — works identically in dev and deployed.
   React.useEffect(() => {
-    const es = new EventSource('/api/webhook/events')
-    es.addEventListener('connected', () => setSseConnected(true))
-    es.addEventListener('webhook', (e) => {
-      try {
-        const ex = JSON.parse((e as MessageEvent).data) as HttpExchange
-        setExchanges((prev) => [ex, ...prev])
-      } catch {
-        /* ignore */
+    let cursor = -1 // first poll only establishes the server-time cursor
+    let stopped = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+
+    async function poll() {
+      if (stopped) return
+      if (document.visibilityState === 'visible') {
+        try {
+          const res = await fetch(`/api/webhook/events?since=${cursor}`, { cache: 'no-store' })
+          const json = (await res.json()) as { ok: boolean; events?: HttpExchange[]; now?: number }
+          if (json.ok && typeof json.now === 'number') {
+            setWebhookLive(true)
+            // Overlap the cursor window so boundary events can't be missed;
+            // re-delivered ones are deduped by exchange id below.
+            cursor = json.now - 2000
+            const fresh = json.events ?? []
+            if (fresh.length > 0) {
+              setExchanges((prev) => {
+                const seen = new Set(prev.map((e) => e.id))
+                const next = fresh.filter((e) => !seen.has(e.id))
+                return next.length > 0 ? [...next, ...prev] : prev
+              })
+            }
+          } else {
+            setWebhookLive(false)
+          }
+        } catch {
+          setWebhookLive(false)
+        }
       }
-    })
-    es.onerror = () => setSseConnected(false)
-    return () => es.close()
+      timer = setTimeout(poll, 3000)
+    }
+
+    poll()
+    return () => {
+      stopped = true
+      if (timer) clearTimeout(timer)
+    }
   }, [])
 
   function pushHops(hops: HttpExchange[]) {
@@ -406,7 +435,7 @@ export default function Console() {
 
   return (
     <div className="flex min-h-screen flex-col bg-ink-900 lg:h-screen lg:overflow-hidden">
-      <TopBar config={config} sseConnected={sseConnected} />
+      <TopBar config={config} webhookLive={webhookLive} />
       <ContextToolbar
         config={config}
         productId={productId}
@@ -578,7 +607,7 @@ function SegTab({
   )
 }
 
-function TopBar({ config, sseConnected }: { config: KidConfig | null; sseConnected: boolean }) {
+function TopBar({ config, webhookLive }: { config: KidConfig | null; webhookLive: boolean }) {
   return (
     <header className="grid-bg sticky top-0 z-20 flex shrink-0 items-center gap-3 border-b border-ink-700/70 bg-ink-950/70 px-4 py-3 backdrop-blur-md backdrop-saturate-150 theme-tx">
       <div className="grid h-9 w-9 place-items-center rounded-xl bg-action/15 ring-1 ring-action/40 shadow-glow">
@@ -607,8 +636,8 @@ function TopBar({ config, sseConnected }: { config: KidConfig | null; sseConnect
           </span>
         )}
         <span className="hidden items-center gap-1.5 rounded-full border border-ink-700/70 bg-ink-900/50 px-2.5 py-1 text-ink-400 sm:inline-flex">
-          <span className={`h-2 w-2 rounded-full ${sseConnected ? 'bg-run animate-pulse-dot' : 'bg-ink-600'}`} />
-          webhook stream
+          <span className={`h-2 w-2 rounded-full ${webhookLive ? 'bg-run animate-pulse-dot' : 'bg-ink-600'}`} />
+          webhook feed
         </span>
         <ThemeToggle />
       </div>

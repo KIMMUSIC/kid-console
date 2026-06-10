@@ -1,54 +1,29 @@
-import { NextRequest } from 'next/server'
-import { randomUUID } from 'node:crypto'
-import { addClient, removeClient } from '../connections'
+import { NextRequest, NextResponse } from 'next/server'
+import { eventsSince, storeBackend } from '@/lib/webhookStore'
 
 export const dynamic = 'force-dynamic'
 
-// Server-Sent Events stream. The inspector subscribes here and receives every
-// inbound webhook in real time.
+// Polling endpoint for the inspector's webhook feed. The client passes the
+// cursor from the previous response (`since=-1` on its first call) and dedupes
+// by exchange id. Polling replaces SSE because on Vercel the webhook POST and
+// a long-lived stream would run in separate instances with no shared memory.
 export async function GET(req: NextRequest) {
-  const encoder = new TextEncoder()
-  const id = randomUUID()
+  const sinceParam = req.nextUrl.searchParams.get('since')
+  const since = sinceParam === null || sinceParam === '' ? -1 : Number(sinceParam)
+  if (!Number.isFinite(since)) {
+    return NextResponse.json({ ok: false, error: 'Invalid since cursor' }, { status: 400 })
+  }
 
-  const stream = new ReadableStream({
-    start(controller) {
-      const send = (event: string, data: unknown) => {
-        controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`))
-      }
-
-      addClient({ id, send })
-      send('connected', { id, at: new Date().toISOString() })
-
-      // Heartbeat keeps the connection alive through proxies.
-      const heartbeat = setInterval(() => {
-        try {
-          controller.enqueue(encoder.encode(`: heartbeat\n\n`))
-        } catch {
-          clearInterval(heartbeat)
-        }
-      }, 15000)
-
-      req.signal.addEventListener('abort', () => {
-        clearInterval(heartbeat)
-        removeClient(id)
-        try {
-          controller.close()
-        } catch {
-          /* already closed */
-        }
-      })
-    },
-    cancel() {
-      removeClient(id)
-    },
-  })
-
-  return new Response(stream, {
-    headers: {
-      'Content-Type': 'text/event-stream; charset=utf-8',
-      'Cache-Control': 'no-cache, no-transform',
-      Connection: 'keep-alive',
-      'X-Accel-Buffering': 'no',
-    },
-  })
+  try {
+    const { events, now } = await eventsSince(since)
+    return NextResponse.json(
+      { ok: true, backend: storeBackend(), events, now },
+      { headers: { 'Cache-Control': 'no-store' } },
+    )
+  } catch (err) {
+    return NextResponse.json(
+      { ok: false, error: err instanceof Error ? err.message : 'Event store unavailable' },
+      { status: 502 },
+    )
+  }
 }

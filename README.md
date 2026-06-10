@@ -20,7 +20,7 @@ it explicit — every hop is captured and rendered:
 Browser  ──①──▶  Next.js proxy  ──②──▶  k-ID API
    ▲                   │                    │
    └────────④──────────┘◀────────③──────────┘
-                ⑤  k-ID ──▶ Webhook (HMAC-verified, streamed via SSE)
+                ⑤  k-ID ──▶ Webhook (HMAC-verified, stored + polled by the inspector)
 ```
 
 The Authorization header is **redacted** before it is ever sent to the browser, so
@@ -120,11 +120,12 @@ app/
     kid/session-get/route.ts              GET  /session/get
     kid/config/route.ts                   non-secret runtime config for the UI
     webhook/route.ts                 inbound webhook + HMAC-SHA256 verify
-    webhook/events/route.ts          SSE stream to the inspector
-    webhook/connections.ts           in-memory SSE client registry
+    webhook/events/route.ts          polling feed for the inspector
 lib/
   kid.ts                         SERVER-ONLY: kidCall() wraps every k-ID request,
                                  redacts Authorization, captures the HttpExchange
+  webhookStore.ts                SERVER-ONLY: webhook event store — Upstash Redis
+                                 when configured (Vercel), process memory otherwise
   types.ts                       shared types (client + server)
 ```
 
@@ -132,16 +133,26 @@ lib/
 records the outbound `proxy→kid` exchange (method, URL, redacted headers, body,
 status, response headers, response body, duration) and returns it alongside the
 data. The client adds its own `browser→proxy` exchange. Webhooks are captured as a
-`webhook` exchange and pushed over SSE. All three hop types render in the inspector,
-color-coded and newest-first.
+`webhook` exchange, written to the event store (`lib/webhookStore.ts`), and picked up
+by the inspector's 3-second poll of `/api/webhook/events`. All three hop types render
+in the inspector, color-coded and newest-first.
 
 ---
 
 ## Webhooks (optional)
 
 k-ID pushes `Challenge.StateChange` and `Session.ChangePermissions` to your webhook
-endpoint. To receive them locally, expose `http://localhost:3000/api/webhook` with a
-tunnel (e.g. `ngrok http 3000`) and register that URL in the Compliance Studio.
+endpoint. Register the endpoint in the Compliance Studio (Developer Settings, per
+product):
+
+- **Deployed on Vercel** — register `https://<your-app>.vercel.app/api/webhook`
+  directly; no tunnel needed. The inspector's live feed additionally needs Upstash
+  Redis (Vercel Marketplace → Upstash, free tier): serverless instances share no
+  memory, so events are stored in Redis and polled. Without Redis the webhook is
+  still received and verified, but won't appear in the inspector.
+- **Local dev** — expose `http://localhost:3000/api/webhook` with a tunnel
+  (e.g. `ngrok http 3000` or `cloudflared tunnel`) and register that URL. No Redis
+  needed locally; events are kept in process memory.
 
 Signature scheme: `HMAC-SHA256( timestamp + rawBody )`, hex lowercase, headers
 `x-signature-hmac-sha256` and `x-signature-timestamp`. Set `WEBHOOK_SECRET` to
