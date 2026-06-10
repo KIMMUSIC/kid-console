@@ -28,12 +28,37 @@
   align-items: center;
   justify-content: center;
   border-bottom: 1px solid #d5d9e2;
+  position: relative;
 }
 .logo {
   font: 900 22px "Arial Black", Arial, sans-serif;
   color: #0a2a52;
   letter-spacing: -2px;
   user-select: none;
+}
+/* back-to-console control, common to every signup step */
+.back {
+  position: absolute;
+  left: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 30px;
+  padding: 0 12px 0 8px;
+  border: 1px solid #d5d9e2;
+  border-radius: 999px;
+  background: #fff;
+  color: #5a606b;
+  font-size: 12.5px;
+  font-family: inherit;
+  text-decoration: none;
+  cursor: pointer;
+}
+.back:hover {
+  border-color: #004c98;
+  color: #004c98;
 }
 
 .content {

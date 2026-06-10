@@ -908,6 +908,15 @@ function TopBar({ config, webhookLive }: { config: KidConfig | null; webhookLive
           <span className={`h-2 w-2 rounded-full ${webhookLive ? 'bg-run animate-pulse-dot' : 'bg-ink-600'}`} />
           webhook feed
         </span>
+        <a
+          href="/signup"
+          className="inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-action/50 bg-action/10 px-3 py-1 font-mono text-[11px] font-semibold text-action transition-all duration-200 ease-apple active:scale-95 hover:bg-action/20"
+        >
+          plaync signup demo
+          <svg className="h-3 w-3" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+            <path fillRule="evenodd" d="M7.21 14.77a.75.75 0 01.02-1.06L10.94 10 7.23 6.29a.75.75 0 111.04-1.08l4.25 4.25a.75.75 0 010 1.08l-4.25 4.25a.75.75 0 01-1.06-.02z" clipRule="evenodd" />
+          </svg>
+        </a>
         <ThemeToggle />
       </div>
     </header>

@@ -3,25 +3,26 @@
 // A plaync-look-alike signup experience whose "Guardian Consent" step is powered
 // by the real k-ID API. The flow mirrors the actual plaync signup:
 //   method -> terms -> country + date of birth -> [age-gate/check] -> branch
-// The branch is driven entirely by the live age-gate/check response so all three
-// outcomes are reachable:
-//   PASS        -> account created, no consent needed
+// The branch is driven entirely by the live age-gate/check response — exactly the
+// decisions k-ID makes at a signup age gate:
+//   PASS        -> account created
 //   CHALLENGE (CHALLENGE_PARENTAL_CONSENT)        -> VPC guardian-consent flow
-//   CHALLENGE (CHALLENGE_AGE_GATE_AGE_ASSURANCE)  -> hosted age-assurance flow
+//   CHALLENGE (CHALLENGE_AGE_GATE_AGE_ASSURANCE)  -> hosted age check, session-linked
 //   PROHIBITED  -> blocked (under the minimum age)
-// Every hop is captured in the docked HTTP inspector (kept dark for contrast).
+// Both challenge types are session-linked (challengeId -> challenge/get-status ->
+// session/get). The standalone AgeKit+ Access Age Verification product is NOT used
+// here: it returns only a verified age range with no kuid/session, so it can't tie
+// into the account being created. Every hop is captured in the docked HTTP inspector.
 
 import React from 'react'
 import QRCode from 'qrcode'
 import type {
-  AccessAgeVerificationResponse,
   AgeGateCheckResponse,
   AgeGateRequirements,
   ChallengeStatusResponse,
   KidChallenge,
   KidSession,
   SendEmailResponse,
-  VerificationStatusResponse,
 } from '@/lib/types'
 import InspectorPanel from '../components/InspectorPanel'
 import { useKidTraffic, type ChallengeWebhook } from './useKidTraffic'
@@ -41,15 +42,13 @@ const COUNTRIES: [string, string][] = [
   ['BR', 'Brazil (BR)'],
 ]
 
-// Convenience presets so each of the three outcomes is easy to demo. The actual
-// branch still comes from the live API response — these only prefill the inputs.
+// Convenience presets. The actual branch still comes from the live age-gate/check
+// response — these only prefill the inputs.
 const PRESETS: { label: string; jurisdiction: string; dob: [string, string, string] }[] = [
-  // US has no age-assurance requirement -> an adult passes straight through.
-  { label: 'Adult · PASS', jurisdiction: 'US', dob: ['2000', '01', '15'] },
+  // Adult over the consent age -> age-gate/check returns PASS.
+  { label: 'Adult · PASS', jurisdiction: 'KR', dob: ['2000', '01', '15'] },
   // Under the consent age -> age-gate/check returns a parental-consent challenge.
   { label: 'Child · Parental consent', jurisdiction: 'US-CA', dob: ['2015', '06', '10'] },
-  // KR requires age assurance -> a passing adult still runs the AgeKit+ check.
-  { label: 'Adult · Age assurance', jurisdiction: 'KR', dob: ['2000', '01', '15'] },
 ]
 
 const YEARS = Array.from({ length: 100 }, (_, i) => String(new Date().getFullYear() - i))
@@ -80,10 +79,6 @@ export default function PlayncSignup() {
   const [challenge, setChallenge] = React.useState<KidChallenge | null>(null)
   const [challengeStatus, setChallengeStatus] = React.useState<ChallengeStatusResponse | null>(null)
   const [session, setSession] = React.useState<KidSession | null>(null)
-  // AgeKit+ Access Age Verification (the age-assurance path, run after a PASS in
-  // a region that requires age assurance).
-  const [accessAv, setAccessAv] = React.useState<AccessAgeVerificationResponse | null>(null)
-  const [verifyStatus, setVerifyStatus] = React.useState<VerificationStatusResponse | null>(null)
   const [loading, setLoading] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
   const [inspectorOpen, setInspectorOpen] = React.useState(true)
@@ -150,24 +145,23 @@ export default function PlayncSignup() {
     setChallenge(null)
     setChallengeStatus(null)
     setSession(null)
-    setAccessAv(null)
-    setVerifyStatus(null)
     setEmailSentTo(null)
     setError(null)
   }
 
-  // Country + DOB -> requirements (context) + age-gate/check -> branch.
+  // Country + DOB -> requirements (jurisdiction context) + age-gate/check -> branch.
+  // Every outcome here is session-linked; no standalone age-verification product.
   async function runAgeGate() {
     setLoading(true)
     setError(null)
     resetFlowState()
     try {
-      const reqRes = await proxyCall<AgeGateRequirements>(
+      // Informational: jurisdiction rules (consent age, etc.) show in the inspector.
+      await proxyCall<AgeGateRequirements>(
         `/api/kid/requirements?jurisdiction=${encodeURIComponent(jurisdiction)}`,
         { method: 'GET' },
         'age-gate/get-requirements',
       )
-      const ageAssuranceRequired = Boolean(reqRes?.data?.ageAssuranceRequired)
       const res = await proxyCall<AgeGateCheckResponse>(
         '/api/kid/age-gate-check',
         {
@@ -184,8 +178,8 @@ export default function PlayncSignup() {
       const data = res.data
       setAgeGate(data)
       if (data.status === 'CHALLENGE' && data.challenge) {
-        // A challenge always wins: parental consent (VPC) or a hosted age-gate
-        // age-assurance challenge, by type.
+        // Both challenge types are session-linked and resolve via challenge/get-status:
+        // parental consent (VPC) or a hosted age-gate age-assurance check.
         setChallenge(data.challenge)
         if (data.challenge.type === 'CHALLENGE_AGE_GATE_AGE_ASSURANCE') {
           setStep('ageassurance')
@@ -196,87 +190,10 @@ export default function PlayncSignup() {
         setStep('blocked')
       } else if (data.status === 'PASS') {
         if (data.session) setSession(data.session)
-        // Passed the age gate, but this region mandates age assurance — verify
-        // the claimed age with AgeKit+ before finishing.
-        if (ageAssuranceRequired) {
-          await startAgeAssurance()
-          setStep('ageassurance')
-        } else {
-          setStep('done')
-        }
+        setStep('done')
       } else {
         setError('Unexpected response from age check.')
       }
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  // Kick off an AgeKit+ Access Age Verification and capture the hosted check URL.
-  async function startAgeAssurance() {
-    const res = await proxyCall<AccessAgeVerificationResponse>(
-      '/api/kid/access-age-verification',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          jurisdiction,
-          criteriaMode: 'age',
-          criteriaAge: '18',
-          criteriaCategory: 'ADULT',
-          claimedDateOfBirth: dob,
-        }),
-      },
-      'age-verification/perform-access-age-verification',
-    )
-    if (res?.ok && res.data?.url) setAccessAv(res.data)
-    else setError(res?.error || 'Could not start age verification.')
-  }
-
-  async function pollVerification() {
-    if (!accessAv?.id) return
-    setLoading(true)
-    setError(null)
-    try {
-      const res = await proxyCall<VerificationStatusResponse>(
-        `/api/kid/verification-status?id=${encodeURIComponent(accessAv.id)}`,
-        { method: 'GET' },
-        'age-verification/get-status',
-      )
-      if (res?.ok && res.data) {
-        setVerifyStatus(res.data)
-        if (res.data.status === 'PASS') setStep('done')
-      } else {
-        setError(res?.error || 'Could not check verification status.')
-      }
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  async function simulateVerification() {
-    if (!accessAv?.id) return
-    setLoading(true)
-    setError(null)
-    try {
-      const res = await proxyCall(
-        '/api/kid/test-set-verification-status',
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            verificationId: accessAv.id,
-            status: 'PASS',
-            ageLow: 18,
-            ageHigh: 120,
-            ageCategory: 'adult',
-            method: 'age-estimation',
-          }),
-        },
-        'test/set-age-verification-status',
-      )
-      if (res?.ok) await pollVerification()
-      else setError(res?.error || 'Could not simulate verification.')
     } finally {
       setLoading(false)
     }
@@ -368,6 +285,12 @@ export default function PlayncSignup() {
     <div className={s.shell}>
       <div className={s.main}>
         <header className={s.header}>
+          <a className={s.back} href="/" title="Back to k-ID Console">
+            <svg width="14" height="14" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+              <path fillRule="evenodd" d="M12.79 5.23a.75.75 0 01-.02 1.06L9.06 10l3.71 3.71a.75.75 0 11-1.04 1.08l-4.25-4.25a.75.75 0 010-1.08l4.25-4.25a.75.75 0 011.06.02z" clipRule="evenodd" />
+            </svg>
+            Console
+          </a>
           <span className={s.logo}>nc</span>
         </header>
 
@@ -404,10 +327,9 @@ export default function PlayncSignup() {
           )}
           {step === 'ageassurance' && (
             <AgeAssuranceStep
-              url={accessAv?.url ?? challenge?.url}
-              shortUrl={accessAv?.shortUrl}
+              url={challenge?.url}
               testMode={testMode} loading={loading} error={error}
-              onPoll={pollVerification} onSimulate={simulateVerification}
+              onPoll={pollStatus} onSimulate={simulateApproval}
             />
           )}
           {step === 'done' && <DoneStep session={session} onRestart={restart} />}
@@ -722,12 +644,12 @@ function GuardianStep({
 }
 
 function AgeAssuranceStep({
-  url, shortUrl, testMode, loading, error, onPoll, onSimulate,
+  url, testMode, loading, error, onPoll, onSimulate,
 }: {
-  url?: string; shortUrl?: string; testMode: boolean; loading: boolean; error: string | null
+  url?: string; testMode: boolean; loading: boolean; error: string | null
   onPoll: () => void; onSimulate: () => void
 }) {
-  const openUrl = shortUrl ?? url
+  const openUrl = url
   return (
     <div className={s.col}>
       <h1 className={s.h1}>Verify your age</h1>
