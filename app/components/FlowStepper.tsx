@@ -8,6 +8,7 @@ import type {
   KidSession,
 } from '@/lib/types'
 import type { FlowInputs } from './FlowPanel'
+import SessionUpgradePanel, { type UpgradeHandlers, type UpgradeState } from './SessionUpgradePanel'
 import {
   ActionButton,
   Badge,
@@ -51,6 +52,8 @@ export default function FlowStepper({
   testMode,
   consentSimulated,
   handlers,
+  upgrade,
+  upgradeHandlers,
   onSimulateConsent,
   onHoverStep,
 }: {
@@ -61,6 +64,8 @@ export default function FlowStepper({
   testMode: boolean
   consentSimulated: boolean
   handlers: StepHandlers
+  upgrade: UpgradeState
+  upgradeHandlers: UpgradeHandlers
   onSimulateConsent: () => void
   onHoverStep?: (key: string | null) => void
 }) {
@@ -290,6 +295,21 @@ export default function FlowStepper({
         >
           {state.session && <SessionCard session={state.session} />}
         </StepCard>
+
+        <GroupHeader
+          title="In-Game · Session Upgrade"
+          desc="The player hits a locked feature (chat, purchase…) mid-game and requests more permissions on the live session."
+          tone="game"
+        />
+        <SessionUpgradePanel
+          session={upgrade.upgraded ?? state.session}
+          upgrade={upgrade}
+          handlers={upgradeHandlers}
+          parentEmail={isEmail(inputs.parentEmail) ? inputs.parentEmail : ''}
+          testMode={testMode}
+          loadingStep={loadingStep}
+          onHoverStep={onHoverStep}
+        />
       </div>
     </section>
   )
@@ -334,10 +354,11 @@ function GroupHeader({
 }: {
   title: string
   desc: string
-  tone: 'assurance' | 'vpc'
+  tone: 'assurance' | 'vpc' | 'game'
 }) {
-  const accent = tone === 'assurance' ? 'text-pending' : 'text-challenge'
-  const bar = tone === 'assurance' ? 'bg-pending' : 'bg-challenge'
+  const accent =
+    tone === 'assurance' ? 'text-pending' : tone === 'game' ? 'text-action' : 'text-challenge'
+  const bar = tone === 'assurance' ? 'bg-pending' : tone === 'game' ? 'bg-action' : 'bg-challenge'
   return (
     <div className="flex items-start gap-2 pb-1 pt-3">
       <span className={`mt-1 h-3.5 w-1 shrink-0 rounded-full ${bar}`} />

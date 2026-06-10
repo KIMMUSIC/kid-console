@@ -11,10 +11,12 @@ import type {
   KidSession,
   ProxyResult,
   SendEmailResponse,
+  SessionUpgradeResponse,
   VerificationStatusResponse,
 } from '@/lib/types'
 import { type ActiveFlow, type FlowInputs } from './FlowPanel'
 import FlowStepper, { type FlowState, type StepHandlers } from './FlowStepper'
+import { EMPTY_UPGRADE, type UpgradeState } from './SessionUpgradePanel'
 import AgeVerificationFlow, { type AccessFlowState } from './AgeVerificationFlow'
 import InspectorPanel from './InspectorPanel'
 import ThemeToggle from './ThemeToggle'
@@ -72,6 +74,7 @@ export default function Console() {
     criteriaCategory: 'ADULT',
   })
   const [flow, setFlow] = React.useState<FlowState>(EMPTY_FLOW)
+  const [upgrade, setUpgrade] = React.useState<UpgradeState>(EMPTY_UPGRADE)
   const [access, setAccess] = React.useState<AccessFlowState>(EMPTY_ACCESS)
   const [consentSimulated, setConsentSimulated] = React.useState(false)
   const [verificationSimulated, setVerificationSimulated] = React.useState(false)
@@ -88,15 +91,32 @@ export default function Console() {
       .catch(() => setConfig(null))
   }, [])
 
-  // A Challenge.StateChange webhook for the challenge we're currently driving
-  // resolves step 4 in place — no manual poll needed. Payload shape:
-  // { eventType, data: { id: <challengeId>, status, sessionId?, approverEmail? } }
+  // Latest sessionId, readable from the webhook callback without re-binding it.
+  const sessionIdRef = React.useRef<string | null>(null)
+  React.useEffect(() => {
+    sessionIdRef.current = flow.session?.sessionId ?? null
+  }, [flow.session])
+  // Bumped when a Session.ChangePermissions webhook targets our session.
+  const [permTick, setPermTick] = React.useState(0)
+
+  // Inbound webhooks drive the flow in place — no manual poll needed:
+  // · Challenge.StateChange { data: { id: <challengeId>, status, sessionId?, approverEmail? } }
+  //   resolves step 4 and/or the in-game upgrade challenge.
+  // · Session.ChangePermissions (parent toggled permissions on the consent page)
+  //   triggers a session re-fetch.
   const applyChallengeWebhook = React.useCallback((ev: HttpExchange) => {
     if (ev.hop !== 'webhook' || ev.response?.ok === false) return
     const body = ev.request.body as
       | { eventType?: string; data?: { id?: string; status?: string; sessionId?: string; approverEmail?: string } }
       | null
-    if (!body || body.eventType !== 'Challenge.StateChange' || !body.data) return
+    if (!body?.data) return
+    if (body.eventType === 'Session.ChangePermissions') {
+      if (body.data.sessionId && body.data.sessionId === sessionIdRef.current) {
+        setPermTick((t) => t + 1)
+      }
+      return
+    }
+    if (body.eventType !== 'Challenge.StateChange') return
     const { id, status, sessionId, approverEmail } = body.data
     if (!id || !status) return
     setFlow((f) => {
@@ -107,6 +127,19 @@ export default function Console() {
           status: status as ChallengeStatusResponse['status'],
           sessionId: sessionId ?? f.challengeStatus?.sessionId,
           approverEmail: approverEmail ?? f.challengeStatus?.approverEmail,
+        },
+        challengeStatusSource: 'webhook',
+      }
+    })
+    // The same webhook also resolves an in-game session-upgrade challenge.
+    setUpgrade((u) => {
+      if (u.response?.challenge?.challengeId !== id) return u
+      return {
+        ...u,
+        challengeStatus: {
+          status: status as ChallengeStatusResponse['status'],
+          sessionId: sessionId ?? u.challengeStatus?.sessionId,
+          approverEmail: approverEmail ?? u.challengeStatus?.approverEmail,
         },
         challengeStatusSource: 'webhook',
       }
@@ -267,6 +300,7 @@ export default function Console() {
       )
       if (res?.ok && res.data) {
         setConsentSimulated(false)
+        setUpgrade(EMPTY_UPGRADE)
         setFlow((f) => ({
           ...f,
           ageGate: res.data!,
@@ -350,6 +384,187 @@ export default function Console() {
     onPoll: runPoll,
     onSession: runSession,
   }
+
+  // ── In-game session upgrade handlers ─────────────────────────────────────────
+
+  async function runUpgrade(permission: string) {
+    const current = upgrade.upgraded ?? flow.session
+    const sessionId = current?.sessionId
+    if (!sessionId) return
+    setLoadingStep('upgrade')
+    setUpgrade({ ...EMPTY_UPGRADE, permission, before: current })
+    try {
+      const res = await proxyCall<SessionUpgradeResponse>(
+        '/api/kid/session-upgrade',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionId, requestedPermissions: [{ name: permission }] }),
+        },
+        'session/upgrade',
+      )
+      if (res?.ok && res.data) {
+        const data = res.data
+        setUpgrade((u) => ({
+          ...u,
+          response: data,
+          // PLAYER-managed permissions resolve instantly with the new session.
+          upgraded: data.challenge ? null : (data.session ?? null),
+        }))
+        if (!data.challenge && data.session) setFlow((f) => ({ ...f, session: data.session! }))
+      } else {
+        setUpgrade((u) => ({ ...u, error: res?.error || 'Request failed' }))
+      }
+    } finally {
+      setLoadingStep(null)
+    }
+  }
+
+  async function runUpgradeSendEmail() {
+    const challengeId = upgrade.response?.challenge?.challengeId
+    if (!challengeId || !inputs.parentEmail) return
+    setLoadingStep('upgrade-email')
+    try {
+      const res = await proxyCall<SendEmailResponse>(
+        '/api/kid/send-email',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ challengeId, email: inputs.parentEmail, locale: 'en-US' }),
+        },
+        'challenge/send-email',
+      )
+      if (res?.ok) setUpgrade((u) => ({ ...u, emailSentTo: inputs.parentEmail, error: undefined }))
+      else setUpgrade((u) => ({ ...u, error: res?.error || 'Request failed' }))
+    } finally {
+      setLoadingStep(null)
+    }
+  }
+
+  async function runUpgradePoll() {
+    const challengeId = upgrade.response?.challenge?.challengeId
+    if (!challengeId) return
+    setLoadingStep('upgrade-poll')
+    try {
+      const res = await proxyCall<ChallengeStatusResponse>(
+        `/api/kid/challenge-status?challengeId=${encodeURIComponent(challengeId)}`,
+        { method: 'GET' },
+        'challenge/get-status',
+      )
+      if (res?.ok && res.data)
+        setUpgrade((u) => ({ ...u, challengeStatus: res.data!, challengeStatusSource: 'api', error: undefined }))
+      else setUpgrade((u) => ({ ...u, error: res?.error || 'Request failed' }))
+    } finally {
+      setLoadingStep(null)
+    }
+  }
+
+  async function runUpgradeSimulate() {
+    const ch = upgrade.response?.challenge
+    if (!ch) return
+    setLoadingStep('upgrade-sim')
+    const age = inputs.age ? Number(inputs.age) : ageFromDob(inputs.dateOfBirth)
+    try {
+      const res = await proxyCall(
+        '/api/kid/test-set-challenge-status',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            challengeId: ch.challengeId,
+            status: 'PASS',
+            age,
+            jurisdiction: inputs.jurisdiction,
+            approverEmail: inputs.parentEmail || 'parent@example.com',
+          }),
+        },
+        'test/set-challenge-status',
+      )
+      if (res?.ok) {
+        // A simulated PASS only resolves the challenge — k-ID does not enable
+        // anything by itself. Emulate the parent ticking the requested
+        // permission on the consent page (full-set semantics).
+        const base = upgrade.before ?? flow.session
+        const enabled = (base?.permissions ?? [])
+          .filter((p) => p.managedBy === 'GUARDIAN' && p.enabled)
+          .map((p) => p.name)
+        if (upgrade.permission && !enabled.includes(upgrade.permission)) {
+          enabled.push(upgrade.permission)
+        }
+        if (base?.sessionId) {
+          await proxyCall(
+            '/api/kid/set-guardian-permissions',
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ sessionId: base.sessionId, enabledPermissions: enabled }),
+            },
+            'session/set-guardian-managed-permissions',
+          )
+        }
+        setUpgrade((u) => ({ ...u, consentSimulated: true }))
+      }
+    } finally {
+      setLoadingStep(null)
+    }
+  }
+
+  // A Session.ChangePermissions webhook targeted our session — re-fetch it so
+  // the permissions table and the game action bar reflect the parent's change.
+  React.useEffect(() => {
+    if (permTick === 0) return
+    const sessionId = sessionIdRef.current
+    if (!sessionId) return
+    let cancelled = false
+    ;(async () => {
+      const res = await proxyCall<KidSession>(
+        `/api/kid/session-get?sessionId=${encodeURIComponent(sessionId)}`,
+        { method: 'GET' },
+        'session/get',
+      )
+      if (!cancelled && res?.ok && res.data) {
+        setFlow((f) => ({ ...f, session: res.data! }))
+        setUpgrade((u) => (u.permission ? { ...u, upgraded: res.data! } : u))
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [permTick])
+
+  // Once the upgrade challenge passes (poll, simulate, or ⚡webhook), re-fetch
+  // the session so the diff and the game action bar reflect the new permissions.
+  // Prefer the ORIGINAL sessionId: a simulated challenge PASS can mint a new
+  // session, and refreshing that one would miss the permissions we changed.
+  const upgradeNeedsRefresh = upgrade.challengeStatus?.status === 'PASS' && !upgrade.upgraded
+  React.useEffect(() => {
+    if (!upgradeNeedsRefresh) return
+    const sessionId =
+      upgrade.before?.sessionId ?? flow.session?.sessionId ?? upgrade.challengeStatus?.sessionId
+    if (!sessionId) return
+    let cancelled = false
+    ;(async () => {
+      setLoadingStep('upgrade-refresh')
+      try {
+        const res = await proxyCall<KidSession>(
+          `/api/kid/session-get?sessionId=${encodeURIComponent(sessionId)}`,
+          { method: 'GET' },
+          'session/get',
+        )
+        if (!cancelled && res?.ok && res.data) {
+          setUpgrade((u) => ({ ...u, upgraded: res.data! }))
+          setFlow((f) => ({ ...f, session: res.data! }))
+        }
+      } finally {
+        if (!cancelled) setLoadingStep(null)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [upgradeNeedsRefresh])
 
   // ── AgeKit+ Access Age Verification handlers ─────────────────────────────────
 
@@ -461,6 +676,7 @@ export default function Console() {
 
   function resetAll() {
     setFlow(EMPTY_FLOW)
+    setUpgrade(EMPTY_UPGRADE)
     setAccess(EMPTY_ACCESS)
     setConsentSimulated(false)
     setVerificationSimulated(false)
@@ -504,6 +720,13 @@ export default function Console() {
               testMode={testMode}
               consentSimulated={consentSimulated}
               handlers={stepHandlers}
+              upgrade={upgrade}
+              upgradeHandlers={{
+                onRequest: runUpgrade,
+                onSendEmail: runUpgradeSendEmail,
+                onPoll: runUpgradePoll,
+                onSimulateConsent: runUpgradeSimulate,
+              }}
               onSimulateConsent={runSimulateConsent}
               onHoverStep={setHighlightKey}
             />

@@ -106,6 +106,17 @@ export interface ChallengeStatusResponse {
   approverEmail?: string
 }
 
+/**
+ * POST /session/upgrade — request extra permissions on a live session.
+ * PLAYER-managed permissions enable instantly (session only); GUARDIAN-managed
+ * ones return a CHALLENGE_SESSION_UPGRADE challenge; verified-age permissions
+ * return CHALLENGE_SESSION_UPGRADE_BY_AGE_ASSURANCE (AgeKit+ instead of consent).
+ */
+export interface SessionUpgradeResponse {
+  session?: KidSession
+  challenge?: KidChallenge
+}
+
 // ── AgeKit+ Access Age Verification ──────────────────────────────────────────
 
 export interface AccessAgeVerificationResponse {
