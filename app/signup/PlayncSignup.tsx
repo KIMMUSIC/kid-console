@@ -20,13 +20,45 @@ import type {
   KidChallenge,
   KidSession,
   SendEmailResponse,
+  SessionUpgradeResponse,
 } from '@/lib/types'
 import InspectorPanel from '../components/InspectorPanel'
 import { useKidTraffic, type ChallengeWebhook } from './useKidTraffic'
 import s from './plaync.module.css'
 
-type Step = 'method' | 'input' | 'guardian' | 'ageassurance' | 'done' | 'blocked'
+type Step = 'method' | 'input' | 'guardian' | 'ageassurance' | 'account' | 'blocked'
 type AgeMode = 'dob' | 'slider'
+
+// Session-upgrade sub-flow state (used on the logged-in account dashboard).
+interface UpgradeState {
+  permission: string | null
+  before: KidSession | null
+  response: SessionUpgradeResponse | null
+  challengeStatus: ChallengeStatusResponse | null
+  emailSentTo: string | null
+  simulated: boolean
+  error?: string
+}
+const EMPTY_UPGRADE: UpgradeState = {
+  permission: null, before: null, response: null, challengeStatus: null, emailSentTo: null, simulated: false,
+}
+
+function permLabel(name: string): string {
+  const n = name.toLowerCase()
+  if (n.includes('voice')) return '음성 채팅'
+  if (n.includes('chat') || n.includes('text') || n.includes('messag')) return '채팅'
+  if (n.includes('purchase') || n.includes('iap') || n.includes('pay') || n.includes('spend') || n.includes('moneti')) return '결제'
+  if (n.includes('profile')) return '공개 프로필'
+  if (n.includes('online') || n.includes('presence') || n.includes('status')) return '온라인 상태'
+  if (n.includes('ugc') || n.includes('content') || n.includes('share')) return '콘텐츠 공유'
+  if (n.includes('ad')) return '맞춤 광고'
+  if (n.includes('push') || n.includes('notif')) return '알림'
+  if (n.includes('friend') || n.includes('social')) return '친구'
+  return name
+}
+function mgmtLabel(m: string): string {
+  return m === 'GUARDIAN' ? '보호자 관리' : m === 'PROHIBITED' ? '제한됨' : '본인 관리'
+}
 
 const COUNTRIES: [string, string][] = [
   ['KR', 'Korea, Republic of'],
@@ -85,6 +117,10 @@ export default function PlayncSignup() {
   const [error, setError] = React.useState<string | null>(null)
   const [inspectorOpen, setInspectorOpen] = React.useState(true)
 
+  // Logged-in account: session-upgrade sub-flow.
+  const [upgrade, setUpgrade] = React.useState<UpgradeState>(EMPTY_UPGRADE)
+  const [upgradeQr, setUpgradeQr] = React.useState<string | null>(null)
+
   const challengeIdRef = React.useRef<string | null>(null)
   React.useEffect(() => {
     challengeIdRef.current = challenge?.challengeId ?? null
@@ -100,7 +136,27 @@ export default function PlayncSignup() {
     return () => { cancelled = true }
   }, [challenge?.url])
 
+  // QR for the upgrade challenge (guardian consent / age assurance on the account page).
+  const upgradeChallengeIdRef = React.useRef<string | null>(null)
+  React.useEffect(() => {
+    upgradeChallengeIdRef.current = upgrade.response?.challenge?.challengeId ?? null
+  }, [upgrade.response])
+  React.useEffect(() => {
+    const url = upgrade.response?.challenge?.url
+    if (!url) { setUpgradeQr(null); return }
+    let cancelled = false
+    QRCode.toDataURL(url, { margin: 1, width: 240 })
+      .then((d) => { if (!cancelled) setUpgradeQr(d) })
+      .catch(() => { if (!cancelled) setUpgradeQr(null) })
+    return () => { cancelled = true }
+  }, [upgrade.response?.challenge?.url])
+
   const onChallengeWebhook = React.useCallback((ev: ChallengeWebhook) => {
+    // Upgrade challenge takes priority when it's the one in flight.
+    if (upgradeChallengeIdRef.current && ev.challengeId === upgradeChallengeIdRef.current) {
+      setUpgrade((u) => ({ ...u, challengeStatus: { status: ev.status, sessionId: ev.sessionId, approverEmail: ev.approverEmail } }))
+      return
+    }
     if (!challengeIdRef.current || ev.challengeId !== challengeIdRef.current) return
     setChallengeStatus({ status: ev.status, sessionId: ev.sessionId, approverEmail: ev.approverEmail })
   }, [])
@@ -135,7 +191,7 @@ export default function PlayncSignup() {
   React.useEffect(() => {
     if (challengeStatus?.status !== 'PASS') return
     const sessionId = challengeStatus.sessionId ?? ageGate?.session?.sessionId
-    if (!sessionId) { setStep('done'); return }
+    if (!sessionId) { setStep('account'); return }
     let cancelled = false
     ;(async () => {
       const res = await proxyCall<KidSession>(
@@ -145,12 +201,31 @@ export default function PlayncSignup() {
       )
       if (!cancelled) {
         if (res?.ok && res.data) setSession(res.data)
-        setStep('done')
+        setStep('account')
       }
     })()
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [challengeStatus?.status])
+
+  // When an upgrade challenge passes, re-read the (original) session so the
+  // permission table reflects the newly granted permission.
+  React.useEffect(() => {
+    if (upgrade.challengeStatus?.status !== 'PASS') return
+    const sid = upgrade.before?.sessionId ?? session?.sessionId
+    if (!sid) return
+    let cancelled = false
+    ;(async () => {
+      const res = await proxyCall<KidSession>(
+        `/api/kid/session-get?sessionId=${encodeURIComponent(sid)}`,
+        { method: 'GET' },
+        'session/get',
+      )
+      if (!cancelled && res?.ok && res.data) setSession(res.data)
+    })()
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [upgrade.challengeStatus?.status])
 
   function resetFlowState() {
     setAgeGate(null); setChallenge(null); setChallengeStatus(null)
@@ -192,7 +267,7 @@ export default function PlayncSignup() {
         setStep('blocked')
       } else if (data.status === 'PASS') {
         if (data.session) setSession(data.session)
-        setStep('done')
+        setStep('account')
       } else {
         setError('연령 확인 응답이 올바르지 않습니다.')
       }
@@ -247,6 +322,107 @@ export default function PlayncSignup() {
       if (res?.ok) await pollStatus()
       else setError(res?.error || '시뮬레이션에 실패했어요.')
     } finally { setLoading(false) }
+  }
+
+  // ── account: session-upgrade sub-flow ──────────────────────────────────────
+  async function requestUpgrade(name: string) {
+    if (!session) return
+    setLoading(true)
+    setUpgrade({ ...EMPTY_UPGRADE, permission: name, before: session })
+    try {
+      const res = await proxyCall<SessionUpgradeResponse>(
+        '/api/kid/session-upgrade',
+        { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionId: session.sessionId, requestedPermissions: [{ name }] }) },
+        'session/upgrade',
+      )
+      if (res?.ok && res.data) {
+        const data = res.data
+        setUpgrade((u) => ({ ...u, response: data }))
+        // PLAYER-managed permissions enable instantly with a fresh session.
+        if (!data.challenge && data.session) setSession(data.session)
+      } else {
+        setUpgrade((u) => ({ ...u, error: res?.error || '권한 요청에 실패했어요.' }))
+      }
+    } finally { setLoading(false) }
+  }
+
+  async function upgradeSendEmail() {
+    const cid = upgrade.response?.challenge?.challengeId
+    if (!cid) return
+    setLoading(true)
+    try {
+      const res = await proxyCall<SendEmailResponse>(
+        '/api/kid/send-email',
+        { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ challengeId: cid, email: guardianEmail, locale: 'ko-KR' }) },
+        'challenge/send-email',
+      )
+      if (res?.ok) setUpgrade((u) => ({ ...u, emailSentTo: guardianEmail, error: undefined }))
+      else setUpgrade((u) => ({ ...u, error: res?.error || '이메일을 보내지 못했어요.' }))
+    } finally { setLoading(false) }
+  }
+
+  async function upgradePoll() {
+    const cid = upgrade.response?.challenge?.challengeId
+    if (!cid) return
+    setLoading(true)
+    try {
+      const res = await proxyCall<ChallengeStatusResponse>(
+        `/api/kid/challenge-status?challengeId=${encodeURIComponent(cid)}`,
+        { method: 'GET' },
+        'challenge/get-status',
+      )
+      if (res?.ok && res.data) setUpgrade((u) => ({ ...u, challengeStatus: res.data!, error: undefined }))
+      else setUpgrade((u) => ({ ...u, error: res?.error || '상태를 확인하지 못했어요.' }))
+    } finally { setLoading(false) }
+  }
+
+  // TEST mode: resolve the upgrade challenge. A simulated guardian PASS doesn't
+  // enable anything by itself, so we also emulate the parent ticking the
+  // requested permission (set-guardian-managed-permissions). Age-assurance
+  // upgrades pass on the player's own verified age — no permission set needed.
+  async function upgradeSimulate() {
+    const ch = upgrade.response?.challenge
+    const base = upgrade.before ?? session
+    if (!ch || !base) return
+    setLoading(true)
+    const isAA = ch.type === 'CHALLENGE_SESSION_UPGRADE_BY_AGE_ASSURANCE'
+    const threshold = base.permissions.find((p) => p.name === upgrade.permission)?.verifiedAgeThreshold
+    const age = isAA ? (threshold ?? 18) : effMode === 'slider' ? sliderAge : ageFromDob(dob) || 18
+    try {
+      const res = await proxyCall(
+        '/api/kid/test-set-challenge-status',
+        { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ challengeId: ch.challengeId, status: 'PASS', age, jurisdiction,
+            approverEmail: guardianEmail || 'parent@example.com' }) },
+        'test/set-challenge-status',
+      )
+      if (res?.ok) {
+        if (!isAA) {
+          const enabled = base.permissions.filter((p) => p.managedBy === 'GUARDIAN' && p.enabled).map((p) => p.name)
+          if (upgrade.permission && !enabled.includes(upgrade.permission)) enabled.push(upgrade.permission)
+          await proxyCall(
+            '/api/kid/set-guardian-permissions',
+            { method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ sessionId: base.sessionId, enabledPermissions: enabled }) },
+            'session/set-guardian-managed-permissions',
+          )
+        }
+        setUpgrade((u) => ({ ...u, simulated: true }))
+        await upgradePoll()
+      } else {
+        setUpgrade((u) => ({ ...u, error: res?.error || '시뮬레이션에 실패했어요.' }))
+      }
+    } finally { setLoading(false) }
+  }
+
+  function logout() {
+    setUpgrade(EMPTY_UPGRADE)
+    resetFlowState()
+    setAgree({ tos: false, privacy: false })
+    setDob('')
+    setStep('method')
   }
 
   function goBack() {
@@ -458,29 +634,124 @@ export default function PlayncSignup() {
             </div>
           )}
 
-          {/* ── 완료 ── */}
-          {step === 'done' && (
+          {/* ── 로그인 계정 대시보드 (권한 + 업그레이드 + 로그아웃) ── */}
+          {step === 'account' && (
             <div className={s.col}>
-              <div className={`${s.bigIcon} ${s.bigPass}`}>✓</div>
-              <h1 className={s.h1}>plaync에 오신 것을 환영합니다</h1>
-              <p className={s.sub}>계정이 준비되었어요. 연령 확인이 완료되었습니다.</p>
-              {session && (
-                <>
-                  <div className={s.lab}>내 계정 권한</div>
-                  <div className={s.permList}>
-                    {session.permissions.slice(0, 8).map((p) => (
+              <div className={s.acctHead}>
+                <span className={s.avatar}>NC</span>
+                <div className={s.who}>
+                  <div className={s.name}>plaync 계정</div>
+                  <div className={s.meta}>로그인됨 · {session?.kuid ?? (session ? session.sessionId.slice(0, 14) + '…' : '—')}</div>
+                </div>
+                <button className={s.logout} onClick={logout}>로그아웃</button>
+              </div>
+
+              <div className={s.lab} style={{ marginTop: 0 }}>내 계정 권한</div>
+              <p className={s.sub} style={{ margin: '0 0 12px', textAlign: 'left', fontSize: 13 }}>
+                어떤 권한이 켜져 있고 꺼져 있는지 확인하고, 꺼진 권한은 업그레이드를 요청할 수 있어요.
+              </p>
+
+              {session && session.permissions.length > 0 ? (
+                <div className={s.permList}>
+                  {session.permissions.map((p) => {
+                    const prohibited = p.managedBy === 'PROHIBITED'
+                    return (
                       <div key={p.name} className={s.permRow}>
-                        {p.name}
+                        <div className={s.permMain}>
+                          <span className={s.label}>{permLabel(p.name)}</span>
+                          <span className={s.code}>{p.name}</span>
+                        </div>
+                        <span className={`${s.mgmt} ${p.managedBy === 'GUARDIAN' ? s.mgmtGuardian : prohibited ? s.mgmtProhibited : s.mgmtPlayer}`}>
+                          {mgmtLabel(p.managedBy)}
+                        </span>
                         <span className={`${s.permState} ${p.enabled ? s.permOn : s.permOff}`}>{p.enabled ? 'ON' : 'OFF'}</span>
+                        {!p.enabled && !prohibited && (
+                          <button className={s.reqBtn} disabled={loading || upgrade.permission === p.name} onClick={() => requestUpgrade(p.name)}>
+                            {upgrade.permission === p.name ? '요청 중…' : '권한 요청'}
+                          </button>
+                        )}
                       </div>
-                    ))}
-                    {session.permissions.length === 0 && (
-                      <div className={s.permRow} style={{ color: '#9aa0aa' }}>반환된 관리 권한이 없습니다.</div>
+                    )
+                  })}
+                </div>
+              ) : (
+                <div className={s.permList}><div className={s.permRow} style={{ color: '#9aa0aa' }}>표시할 권한이 없습니다.</div></div>
+              )}
+
+              {upgrade.permission && (() => {
+                const ch = upgrade.response?.challenge
+                const instant = upgrade.response && !ch ? upgrade.response.session : null
+                const passed = upgrade.challengeStatus?.status === 'PASS'
+                const failed = upgrade.challengeStatus?.status === 'FAIL'
+                const isAA = ch?.type === 'CHALLENGE_SESSION_UPGRADE_BY_AGE_ASSURANCE'
+                return (
+                  <div className={s.upgradeBox}>
+                    <div className={s.uHead}>
+                      권한 요청 — {permLabel(upgrade.permission)}
+                      <button className={s.uClose} onClick={() => setUpgrade(EMPTY_UPGRADE)} title="닫기">×</button>
+                    </div>
+                    {upgrade.error && <div className={s.errbox}>{upgrade.error}</div>}
+
+                    {instant && <div className={s.ok}>✓ 본인 관리 권한 — 즉시 활성화되었습니다.</div>}
+
+                    {ch && passed && <div className={s.ok}>✓ 승인 완료 — 권한이 활성화되었습니다.</div>}
+                    {ch && failed && <div className={s.errbox}>요청이 거부되었습니다.</div>}
+
+                    {ch && !passed && !failed && (
+                      <>
+                        <div className={s.callout} style={{ marginTop: 10 }}>
+                          <span className={s.calloutI}>i</span>
+                          <div>{isAA
+                            ? '본인 연령 확인이 필요한 권한이에요. 아래에서 연령을 확인하면 활성화됩니다.'
+                            : '보호자 승인이 필요한 권한이에요. 아래 방법 중 하나로 보호자에게 요청하세요.'}</div>
+                        </div>
+
+                        {isAA && ch.url && (
+                          <iframe src={ch.url} title="연령 확인" style={{ width: '100%', height: 440, border: '1px solid #c6cfd8', marginTop: 10 }} />
+                        )}
+
+                        <div className={s.lab}>승인 링크</div>
+                        <div className={s.linkRow}>
+                          <input className={s.linkInput} readOnly value={ch.url ?? ''} />
+                          {ch.url && <CopyMini text={ch.url} />}
+                          {ch.url && <a className={s.miniBtn} href={ch.url} target="_blank" rel="noreferrer" style={{ display: 'grid', placeItems: 'center', textDecoration: 'none' }}>열기 ↗</a>}
+                        </div>
+
+                        {!isAA && upgradeQr && (
+                          <div className={s.qrRow} style={{ marginTop: 12 }}>
+                            <div className={s.qrBox}><img src={upgradeQr} alt="승인 QR 코드" /></div>
+                            <p className={s.mDesc} style={{ margin: 0 }}>보호자가 휴대폰으로 스캔하면 동의 페이지가 열려요.</p>
+                          </div>
+                        )}
+
+                        {ch.oneTimePassword && (
+                          <div className={s.otpBig} style={{ marginTop: 12 }}>
+                            <span className={s.code} style={{ fontSize: 24, color: '#004c98', letterSpacing: 6, fontWeight: 700 }}>{ch.oneTimePassword}</span>
+                            <CopyMini text={ch.oneTimePassword} />
+                            {fmtExpiry(ch.otpExpiresAt) && <span className={s.exp}>{fmtExpiry(ch.otpExpiresAt)}</span>}
+                          </div>
+                        )}
+
+                        {!isAA && (
+                          <>
+                            <div className={s.lab}>보호자 이메일로 요청</div>
+                            <div className={s.emailRow}>
+                              <input className={s.field} type="email" value={guardianEmail} onChange={(e) => setGuardianEmail(e.target.value)} placeholder="parent@example.com" />
+                              <button className={s.miniBtn} disabled={loading || !guardianEmail} onClick={upgradeSendEmail}>{upgrade.emailSentTo ? '재전송' : '보내기'}</button>
+                            </div>
+                            {upgrade.emailSentTo && <div className={s.sent}>✓ {upgrade.emailSentTo} 으로 전송됨</div>}
+                          </>
+                        )}
+
+                        <div className={s.divider} />
+                        <div className={s.statusBar}><span className={s.spin} /> {isAA ? '연령 확인 대기 중…' : '보호자 승인 대기 중…'}</div>
+                        <button className={s.btn} disabled={loading} onClick={upgradePoll}>{loading ? '확인 중…' : '확인'}</button>
+                        {testMode && <button className={s.btnAlt} disabled={loading} onClick={upgradeSimulate}>⚡ {isAA ? '연령 확인' : '보호자 승인'} 시뮬레이션 (TEST)</button>}
+                      </>
                     )}
                   </div>
-                </>
-              )}
-              <button className={s.btnAlt} onClick={restart} style={{ marginTop: 24 }}>처음으로</button>
+                )
+              })()}
             </div>
           )}
 
