@@ -119,6 +119,38 @@
 }
 
 @layer utilities {
+  /* Scope the dark palette to a subtree regardless of the page theme. The k-ID
+     signup experience renders a light plaync clone but keeps the HTTP inspector
+     dark for that "behind-the-scenes" devtools contrast. CSS custom properties
+     cascade to descendants, so every ink-* / run / action utility inside
+     re-resolves to these values. Mirrors :root[data-theme='dark']. */
+  .theme-dark-scope {
+    color-scheme: dark;
+    --ink-950: 11 17 32;
+    --ink-900: 15 23 42;
+    --ink-800: 30 41 59;
+    --ink-700: 51 65 85;
+    --ink-600: 71 85 105;
+    --ink-500: 100 116 139;
+    --ink-400: 148 163 184;
+    --ink-300: 203 213 225;
+    --ink-200: 226 232 240;
+    --ink-100: 241 245 249;
+    --ink-50: 248 250 252;
+    --run: 34 197 94;
+    --run-dark: 22 163 74;
+    --action: 41 151 255;
+    --action-deep: 0 102 204;
+    --action-focus: 0 113 227;
+    --action-dark: 26 134 240;
+    --pass: 34 197 94;
+    --challenge: 245 158 11;
+    --prohibited: 239 68 68;
+    --pending: 56 189 248;
+    --scrollbar: 51 65 85;
+    --scrollbar-hover: 71 85 105;
+    background-color: rgb(var(--ink-950));
+  }
   .text-balance {
     text-wrap: balance;
   }
