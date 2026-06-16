@@ -7,15 +7,14 @@ export const dynamic = 'force-dynamic'
 // Inspect the resulting session: GET /api/v1/session/get?sessionId=...
 // Shows the permissions/allowances the player ends up with.
 export async function GET(req: NextRequest) {
-  const sessionId = req.nextUrl.searchParams.get('sessionId') || ''
-  const kuid = req.nextUrl.searchParams.get('kuid') || ''
+  const query = Object.fromEntries(req.nextUrl.searchParams.entries())
 
   const { ok, status, data, error, exchange } = await kidCall<KidSession>({
     method: 'GET',
     path: '/session/get',
     title: 'session/get',
     productId: req.headers.get('x-kid-product'),
-    query: { sessionId, kuid },
+    query,
   })
 
   const result: ProxyResult<KidSession> = { ok, status, data, error, exchanges: [exchange] }

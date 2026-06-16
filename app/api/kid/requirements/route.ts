@@ -8,14 +8,14 @@ export const dynamic = 'force-dynamic'
 // Tells you the digital-consent age, civil (adult) age, minimum age, and which
 // age-collection methods are approved before you ever check a player.
 export async function GET(req: NextRequest) {
-  const jurisdiction = req.nextUrl.searchParams.get('jurisdiction') || ''
+  const query = Object.fromEntries(req.nextUrl.searchParams.entries())
 
   const { ok, status, data, error, exchange } = await kidCall<AgeGateRequirements>({
     method: 'GET',
     path: '/age-gate/get-requirements',
     title: 'age-gate/get-requirements',
     productId: req.headers.get('x-kid-product'),
-    query: { jurisdiction },
+    query,
   })
 
   const result: ProxyResult<AgeGateRequirements> = { ok, status, data, error, exchanges: [exchange] }

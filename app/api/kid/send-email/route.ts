@@ -9,11 +9,8 @@ export const dynamic = 'force-dynamic'
 // This is how VPC is initiated via the API instead of the hosted widget.
 export async function POST(req: NextRequest) {
   const input = await req.json().catch(() => ({}))
-
-  const body: Record<string, unknown> = {}
-  if (input.challengeId) body.challengeId = String(input.challengeId)
-  if (input.email) body.email = String(input.email)
-  if (input.locale) body.locale = String(input.locale)
+  const body: Record<string, unknown> =
+    input && typeof input === 'object' && !Array.isArray(input) ? input : {}
 
   const { ok, status, data, error, exchange } = await kidCall<SendEmailResponse>({
     method: 'POST',

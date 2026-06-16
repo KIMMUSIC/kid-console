@@ -7,14 +7,14 @@ export const dynamic = 'force-dynamic'
 // Authoritative consent result: GET /api/v1/challenge/get-status?challengeId=...
 // PENDING / IN_PROGRESS until a trusted adult approves, then PASS or FAIL.
 export async function GET(req: NextRequest) {
-  const challengeId = req.nextUrl.searchParams.get('challengeId') || ''
+  const query = Object.fromEntries(req.nextUrl.searchParams.entries())
 
   const { ok, status, data, error, exchange } = await kidCall<ChallengeStatusResponse>({
     method: 'GET',
     path: '/challenge/get-status',
     title: 'challenge/get-status',
     productId: req.headers.get('x-kid-product'),
-    query: { challengeId },
+    query,
   })
 
   const result: ProxyResult<ChallengeStatusResponse> = { ok, status, data, error, exchanges: [exchange] }
