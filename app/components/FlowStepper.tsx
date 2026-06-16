@@ -38,6 +38,24 @@ export interface StepHandlers {
   onSession: () => void
 }
 
+export interface StepRequestEditor {
+  label: string
+  text: string
+  customized: boolean
+  ready: boolean
+  error?: string
+  onChange: (next: string) => void
+  onReset: () => void
+}
+
+export interface FlowRequestEditors {
+  requirements: StepRequestEditor
+  check: StepRequestEditor
+  sendEmail: StepRequestEditor
+  poll: StepRequestEditor
+  session: StepRequestEditor
+}
+
 const AGE_PRESETS: [string, string][] = [
   ['Child · 8', '2017-08-15'],
   ['Teen · 14', '2011-08-15'],
@@ -52,6 +70,7 @@ export default function FlowStepper({
   testMode,
   consentSimulated,
   handlers,
+  requests,
   upgrade,
   upgradeHandlers,
   onSimulateConsent,
@@ -64,6 +83,7 @@ export default function FlowStepper({
   testMode: boolean
   consentSimulated: boolean
   handlers: StepHandlers
+  requests: FlowRequestEditors
   upgrade: UpgradeState
   upgradeHandlers: UpgradeHandlers
   onSimulateConsent: () => void
@@ -108,13 +128,15 @@ export default function FlowStepper({
           endpoint="age-gate/get-requirements"
           title="Get jurisdiction requirements"
           desc="Digital-consent age, civil age, minimum age, approved age-collection methods."
-          enabled={Boolean(inputs.jurisdiction)}
+          enabled={requests.requirements.ready}
+          disabledHint={requests.requirements.error || (!inputs.jurisdiction ? 'Set a jurisdiction' : undefined)}
           running={loadingStep === 'requirements'}
           done={Boolean(state.requirements)}
           error={state.stepError.requirements}
           runLabel="Send"
           onRun={handlers.onRequirements}
           onHover={onHoverStep}
+          request={requests.requirements}
         >
           {state.requirements && <RequirementsResult data={state.requirements} />}
         </StepCard>
@@ -126,13 +148,20 @@ export default function FlowStepper({
           endpoint="age-gate/check"
           title="Run the age gate"
           desc="PASS, PROHIBITED, or CHALLENGE. A CHALLENGE creates a parental-consent challenge."
-          enabled={Boolean(inputs.jurisdiction) && hasAgeInput}
+          enabled={requests.check.ready}
+          disabledHint={
+            requests.check.error ||
+            (!requests.check.ready && !inputs.kuid && !hasAgeInput
+              ? 'Set kuid, date of birth, or age'
+              : undefined)
+          }
           running={loadingStep === 'check'}
           done={Boolean(state.ageGate)}
           error={state.stepError.check}
           runLabel="Send"
           onRun={handlers.onCheck}
           onHover={onHoverStep}
+          request={requests.check}
           form={
             <CtxForm>
               <CtxField label="Date of birth" hint="drives the age decision">
@@ -200,13 +229,14 @@ export default function FlowStepper({
           endpoint="challenge/send-email"
           title="Email the parental-consent challenge"
           desc="The VPC trigger without a widget: emails the consent link + OTP to a trusted adult."
-          enabled={Boolean(challengeId) && isEmail(inputs.parentEmail)}
+          enabled={requests.sendEmail.ready}
           disabledHint={
-            !challengeId
+            requests.sendEmail.error ||
+            (!challengeId
               ? 'Needs a CHALLENGE from step 2'
               : !isEmail(inputs.parentEmail)
                 ? 'Enter a parent/guardian email'
-                : undefined
+                : undefined)
           }
           running={loadingStep === 'send-email'}
           done={Boolean(state.emailSentTo)}
@@ -214,6 +244,7 @@ export default function FlowStepper({
           runLabel="Send email"
           onRun={handlers.onSendEmail}
           onHover={onHoverStep}
+          request={requests.sendEmail}
           form={
             <CtxForm>
               <CtxField label="Parent / guardian email" hint="recipient of the consent challenge">
@@ -259,14 +290,15 @@ export default function FlowStepper({
           endpoint="challenge/get-status"
           title="Poll the consent result"
           desc="PENDING / IN_PROGRESS until a trusted adult approves, then PASS or FAIL."
-          enabled={Boolean(challengeId)}
-          disabledHint={!challengeId ? 'Needs a CHALLENGE from step 2' : undefined}
+          enabled={requests.poll.ready}
+          disabledHint={requests.poll.error || (!challengeId ? 'Needs a CHALLENGE from step 2' : undefined)}
           running={loadingStep === 'poll'}
           done={Boolean(state.challengeStatus)}
           error={state.stepError.poll}
           runLabel="Poll status"
           onRun={handlers.onPoll}
           onHover={onHoverStep}
+          request={requests.poll}
         >
           {state.challengeStatus && (
             <ChallengeStatusResult
@@ -283,14 +315,15 @@ export default function FlowStepper({
           endpoint="session/get"
           title="Inspect the resulting session"
           desc="The permissions and allowances the player ends up with."
-          enabled={Boolean(sessionId)}
-          disabledHint={!sessionId ? 'Needs a sessionId (from PASS / approved consent)' : undefined}
+          enabled={requests.session.ready}
+          disabledHint={requests.session.error || (!sessionId ? 'Needs a sessionId (from PASS / approved consent)' : undefined)}
           running={loadingStep === 'session'}
           done={Boolean(state.session)}
           error={state.stepError.session}
           runLabel="Send"
           onRun={handlers.onSession}
           onHover={onHoverStep}
+          request={requests.session}
           last
         >
           {state.session && <SessionCard session={state.session} />}
@@ -469,6 +502,7 @@ function StepCard({
   onRun,
   onHover,
   form,
+  request,
   last,
   children,
 }: {
@@ -486,6 +520,7 @@ function StepCard({
   onRun: () => void
   onHover?: (key: string | null) => void
   form?: React.ReactNode
+  request?: StepRequestEditor
   last?: boolean
   children?: React.ReactNode
 }) {
@@ -551,6 +586,8 @@ function StepCard({
 
         {form && <div className="mt-3">{form}</div>}
 
+        {request && <RequestParamToggle request={request} />}
+
         {!enabled && disabledHint && (
           <p className="mt-2 flex items-center gap-1.5 font-mono text-[11px] text-ink-600">
             <svg className="h-3 w-3 shrink-0" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
@@ -570,6 +607,68 @@ function StepCard({
         )}
         {children && <div className="mt-3 animate-fade-up">{children}</div>}
       </div>
+    </div>
+  )
+}
+
+function RequestParamToggle({ request }: { request: StepRequestEditor }) {
+  const [open, setOpen] = React.useState(false)
+  return (
+    <div className="mt-3 overflow-hidden rounded-lg border border-ink-700/70 bg-ink-950/30">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="flex w-full cursor-pointer items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-ink-900/60"
+      >
+        <svg
+          className={`h-3.5 w-3.5 shrink-0 text-ink-500 transition-transform duration-200 ${open ? 'rotate-90' : ''}`}
+          viewBox="0 0 20 20"
+          fill="currentColor"
+          aria-hidden="true"
+        >
+          <path d="M7.2 4.8a.75.75 0 011.06 0l4.95 4.95a.75.75 0 010 1.06l-4.95 4.95A.75.75 0 017.2 14.7L11.62 10 7.2 5.86a.75.75 0 010-1.06z" />
+        </svg>
+        <span className="font-mono text-[11px] font-semibold uppercase tracking-wider text-ink-300">
+          {request.label}
+        </span>
+        {request.customized && (
+          <Badge className="border-action/50 bg-action/10 text-action">custom</Badge>
+        )}
+        {request.error && <span className="font-mono text-[10.5px] text-prohibited">invalid JSON</span>}
+        <span className="ml-auto font-mono text-[10.5px] text-ink-500">
+          {open ? 'hide' : 'expand'}
+        </span>
+      </button>
+
+      {open && (
+        <div className="animate-fade-up border-t border-ink-800 p-3">
+          <textarea
+            value={request.text}
+            onChange={(e) => request.onChange(e.target.value)}
+            spellCheck={false}
+            rows={Math.min(12, Math.max(5, request.text.split('\n').length + 1))}
+            className="min-h-[120px] w-full resize-y rounded-lg border border-ink-700 bg-ink-950/80 px-3 py-2 font-mono text-[12px] leading-relaxed text-ink-100 outline-none transition-colors placeholder:text-ink-600 focus:border-action/60 focus:ring-1 focus:ring-action/40"
+          />
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <CopyButton getText={() => request.text} />
+            <button
+              type="button"
+              onClick={request.onReset}
+              disabled={!request.customized}
+              className="cursor-pointer rounded-full border border-ink-700 px-2 py-0.5 font-mono text-[11px] text-ink-300 transition-all duration-200 ease-apple active:scale-95 hover:border-action/50 hover:text-action disabled:cursor-not-allowed disabled:border-ink-800 disabled:text-ink-600"
+            >
+              Reset to UI values
+            </button>
+            <span className="ml-auto font-mono text-[10.5px] text-ink-500">
+              This exact object is used for the next request.
+            </span>
+          </div>
+          {request.error && (
+            <p className="mt-2 font-mono text-[11px] text-prohibited">{request.error}</p>
+          )}
+        </div>
+      )}
     </div>
   )
 }

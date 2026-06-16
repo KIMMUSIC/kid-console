@@ -9,14 +9,8 @@ export const dynamic = 'force-dynamic'
 // (when consent is required) returns a parental-consent challenge.
 export async function POST(req: NextRequest) {
   const input = await req.json().catch(() => ({}))
-
-  const body: Record<string, unknown> = {}
-  if (input.jurisdiction) body.jurisdiction = String(input.jurisdiction)
-  if (input.dateOfBirth) body.dateOfBirth = String(input.dateOfBirth)
-  if (input.age !== undefined && input.age !== '' && input.age !== null) {
-    body.age = Number(input.age)
-  }
-  if (input.kuid) body.kuid = String(input.kuid)
+  const body: Record<string, unknown> =
+    input && typeof input === 'object' && !Array.isArray(input) ? input : {}
 
   const { ok, status, data, error, exchange } = await kidCall<AgeGateCheckResponse>({
     method: 'POST',

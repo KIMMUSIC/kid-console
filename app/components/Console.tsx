@@ -15,7 +15,7 @@ import type {
   VerificationStatusResponse,
 } from '@/lib/types'
 import { type ActiveFlow, type FlowInputs } from './FlowPanel'
-import FlowStepper, { type FlowState, type StepHandlers } from './FlowStepper'
+import FlowStepper, { type FlowRequestEditors, type FlowState, type StepHandlers } from './FlowStepper'
 import { EMPTY_UPGRADE, type UpgradeState } from './SessionUpgradePanel'
 import AgeVerificationFlow, { type AccessFlowState } from './AgeVerificationFlow'
 import InspectorPanel from './InspectorPanel'
@@ -53,6 +53,10 @@ const EMPTY_ACCESS: AccessFlowState = {
   errors: {},
 }
 
+type JsonObject = Record<string, unknown>
+type RequestKey = 'requirements' | 'check' | 'send-email' | 'poll' | 'session'
+type RequestDrafts = Partial<Record<RequestKey, string>>
+
 export default function Console() {
   const [config, setConfig] = React.useState<KidConfig | null>(null)
   const [exchanges, setExchanges] = React.useState<HttpExchange[]>([])
@@ -76,6 +80,7 @@ export default function Console() {
   const [flow, setFlow] = React.useState<FlowState>(EMPTY_FLOW)
   const [upgrade, setUpgrade] = React.useState<UpgradeState>(EMPTY_UPGRADE)
   const [access, setAccess] = React.useState<AccessFlowState>(EMPTY_ACCESS)
+  const [requestDrafts, setRequestDrafts] = React.useState<RequestDrafts>({})
   const [consentSimulated, setConsentSimulated] = React.useState(false)
   const [verificationSimulated, setVerificationSimulated] = React.useState(false)
   const testMode = config?.testMode ?? false
@@ -269,12 +274,71 @@ export default function Console() {
     setFlow((f) => ({ ...f, stepError: { ...f.stepError, [step]: message } }))
   }
 
+  const flowChallengeId = flow.ageGate?.challenge?.challengeId ?? ''
+  const flowSessionId = flow.challengeStatus?.sessionId ?? flow.ageGate?.session?.sessionId ?? ''
+  const requestDefaults: Record<RequestKey, JsonObject> = {
+    requirements: compactParams({ jurisdiction: inputs.jurisdiction }),
+    check: defaultAgeGateCheckParams(inputs),
+    'send-email': compactParams({ challengeId: flowChallengeId, email: inputs.parentEmail, locale: 'en-US' }),
+    poll: compactParams({ challengeId: flowChallengeId }),
+    session: compactParams({ sessionId: flowSessionId }),
+  }
+
+  function makeRequestEditor(
+    key: RequestKey,
+    label: string,
+    isReady: (params: JsonObject) => boolean,
+  ) {
+    const text = requestDrafts[key] ?? stringifyParams(requestDefaults[key])
+    const parsed = parseRequestText(text)
+    return {
+      label,
+      text,
+      customized: requestDrafts[key] !== undefined,
+      ready: !parsed.error && isReady(parsed.params),
+      error: parsed.error,
+      onChange: (next: string) => setRequestDrafts((prev) => ({ ...prev, [key]: next })),
+      onReset: () =>
+        setRequestDrafts((prev) => {
+          const next = { ...prev }
+          delete next[key]
+          return next
+        }),
+    }
+  }
+
+  function activeRequestParams(key: RequestKey): { params: JsonObject | null; error?: string } {
+    const text = requestDrafts[key] ?? stringifyParams(requestDefaults[key])
+    const parsed = parseRequestText(text)
+    if (parsed.error) return { params: null, error: parsed.error }
+    return { params: parsed.params }
+  }
+
+  const flowRequests: FlowRequestEditors = {
+    requirements: makeRequestEditor('requirements', 'Query parameters', (params) =>
+      hasParamValue(params, 'jurisdiction'),
+    ),
+    check: makeRequestEditor('check', 'JSON body parameters', isAgeGateCheckReady),
+    sendEmail: makeRequestEditor('send-email', 'JSON body parameters', (params) =>
+      hasParamValue(params, 'challengeId') && isEmail(String(params.email ?? '')),
+    ),
+    poll: makeRequestEditor('poll', 'Query parameters', (params) => hasParamValue(params, 'challengeId')),
+    session: makeRequestEditor('session', 'Query parameters', (params) =>
+      hasParamValue(params, 'sessionId') || hasParamValue(params, 'kuid') || hasParamValue(params, 'etag'),
+    ),
+  }
+
   async function runRequirements() {
+    const req = activeRequestParams('requirements')
+    if (req.error || !req.params) {
+      setStepError('requirements', req.error || 'Invalid request parameters')
+      return
+    }
     setLoadingStep('requirements')
     setStepError('requirements', undefined)
     try {
       const res = await proxyCall<AgeGateRequirements>(
-        `/api/kid/requirements?jurisdiction=${encodeURIComponent(inputs.jurisdiction)}`,
+        withQuery('/api/kid/requirements', req.params),
         { method: 'GET' },
         'age-gate/get-requirements',
       )
@@ -286,16 +350,17 @@ export default function Console() {
   }
 
   async function runCheck() {
+    const req = activeRequestParams('check')
+    if (req.error || !req.params) {
+      setStepError('check', req.error || 'Invalid request parameters')
+      return
+    }
     setLoadingStep('check')
     setStepError('check', undefined)
-    const body: Record<string, unknown> = { jurisdiction: inputs.jurisdiction }
-    if (inputs.kuid) body.kuid = inputs.kuid
-    if (inputs.age) body.age = inputs.age
-    else if (inputs.dateOfBirth) body.dateOfBirth = inputs.dateOfBirth
     try {
       const res = await proxyCall<AgeGateCheckResponse>(
         '/api/kid/age-gate-check',
-        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) },
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(req.params) },
         'age-gate/check',
       )
       if (res?.ok && res.data) {
@@ -319,8 +384,11 @@ export default function Console() {
   }
 
   async function runSendEmail() {
-    const challengeId = flow.ageGate?.challenge?.challengeId
-    if (!challengeId) return
+    const req = activeRequestParams('send-email')
+    if (req.error || !req.params) {
+      setStepError('send-email', req.error || 'Invalid request parameters')
+      return
+    }
     setLoadingStep('send-email')
     setStepError('send-email', undefined)
     try {
@@ -329,11 +397,11 @@ export default function Console() {
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ challengeId, email: inputs.parentEmail, locale: 'en-US' }),
+          body: JSON.stringify(req.params),
         },
         'challenge/send-email',
       )
-      if (res?.ok) setFlow((f) => ({ ...f, emailSentTo: inputs.parentEmail }))
+      if (res?.ok) setFlow((f) => ({ ...f, emailSentTo: String(req.params?.email ?? inputs.parentEmail) }))
       else setStepError('send-email', res?.error || 'Request failed')
     } finally {
       setLoadingStep(null)
@@ -341,13 +409,16 @@ export default function Console() {
   }
 
   async function runPoll() {
-    const challengeId = flow.ageGate?.challenge?.challengeId
-    if (!challengeId) return
+    const req = activeRequestParams('poll')
+    if (req.error || !req.params) {
+      setStepError('poll', req.error || 'Invalid request parameters')
+      return
+    }
     setLoadingStep('poll')
     setStepError('poll', undefined)
     try {
       const res = await proxyCall<ChallengeStatusResponse>(
-        `/api/kid/challenge-status?challengeId=${encodeURIComponent(challengeId)}`,
+        withQuery('/api/kid/challenge-status', req.params),
         { method: 'GET' },
         'challenge/get-status',
       )
@@ -360,13 +431,16 @@ export default function Console() {
   }
 
   async function runSession() {
-    const sessionId = flow.challengeStatus?.sessionId ?? flow.ageGate?.session?.sessionId
-    if (!sessionId) return
+    const req = activeRequestParams('session')
+    if (req.error || !req.params) {
+      setStepError('session', req.error || 'Invalid request parameters')
+      return
+    }
     setLoadingStep('session')
     setStepError('session', undefined)
     try {
       const res = await proxyCall<KidSession>(
-        `/api/kid/session-get?sessionId=${encodeURIComponent(sessionId)}`,
+        withQuery('/api/kid/session-get', req.params),
         { method: 'GET' },
         'session/get',
       )
@@ -691,6 +765,7 @@ export default function Console() {
     setFlow(EMPTY_FLOW)
     setUpgrade(EMPTY_UPGRADE)
     setAccess(EMPTY_ACCESS)
+    setRequestDrafts({})
     setConsentSimulated(false)
     setVerificationSimulated(false)
   }
@@ -733,6 +808,7 @@ export default function Console() {
               testMode={testMode}
               consentSimulated={consentSimulated}
               handlers={stepHandlers}
+              requests={flowRequests}
               upgrade={upgrade}
               upgradeHandlers={{
                 onRequest: runUpgrade,
@@ -921,6 +997,106 @@ function TopBar({ config, webhookLive }: { config: KidConfig | null; webhookLive
       </div>
     </header>
   )
+}
+
+function stringifyParams(params: JsonObject): string {
+  return JSON.stringify(params, null, 2)
+}
+
+function parseRequestText(text: string): { params: JsonObject; error?: string } {
+  try {
+    const parsed = JSON.parse(text) as unknown
+    if (!isJsonObject(parsed)) {
+      return { params: {}, error: 'Parameters must be a JSON object.' }
+    }
+    return { params: parsed }
+  } catch (err) {
+    return {
+      params: {},
+      error: err instanceof Error ? err.message : 'Invalid JSON',
+    }
+  }
+}
+
+function isJsonObject(value: unknown): value is JsonObject {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+function compactParams(params: JsonObject): JsonObject {
+  const next: JsonObject = {}
+  for (const [key, value] of Object.entries(params)) {
+    if (value === undefined || value === null) continue
+    if (typeof value === 'string') {
+      const trimmed = value.trim()
+      if (!trimmed) continue
+      next[key] = trimmed
+      continue
+    }
+    next[key] = value
+  }
+  return next
+}
+
+function defaultAgeGateCheckParams(inputs: FlowInputs): JsonObject {
+  const kuid = inputs.kuid.trim()
+  if (kuid) return { kuid }
+
+  const params: JsonObject = { jurisdiction: inputs.jurisdiction }
+  if (inputs.age !== '') {
+    const age = Number(inputs.age)
+    params.age = Number.isFinite(age) ? age : inputs.age
+  } else if (inputs.dateOfBirth) {
+    params.dateOfBirth = inputs.dateOfBirth
+  }
+  return compactParams(params)
+}
+
+function hasParamValue(params: JsonObject, key: string): boolean {
+  const value = params[key]
+  if (value === undefined || value === null) return false
+  if (typeof value === 'string') return value.trim().length > 0
+  if (Array.isArray(value)) return value.length > 0
+  if (isJsonObject(value)) return Object.keys(value).length > 0
+  return true
+}
+
+function isAgeGateCheckReady(params: JsonObject): boolean {
+  return (
+    hasParamValue(params, 'kuid') ||
+    (hasParamValue(params, 'jurisdiction') &&
+      (hasParamValue(params, 'dateOfBirth') ||
+        hasParamValue(params, 'age') ||
+        isJsonObject(params.platformAgeSignal)))
+  )
+}
+
+function withQuery(path: string, params: JsonObject): string {
+  const [base, existingQuery = ''] = path.split('?')
+  const search = new URLSearchParams(existingQuery)
+  for (const [key, value] of Object.entries(params)) {
+    appendQueryParam(search, key, value)
+  }
+  const query = search.toString()
+  return query ? `${base}?${query}` : base
+}
+
+function appendQueryParam(search: URLSearchParams, key: string, value: unknown) {
+  if (value === undefined || value === null || value === '') return
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      if (item !== undefined && item !== null && item !== '') search.append(key, queryParamValue(item))
+    }
+    return
+  }
+  search.set(key, queryParamValue(value))
+}
+
+function queryParamValue(value: unknown): string {
+  return isJsonObject(value) || Array.isArray(value) ? JSON.stringify(value) : String(value)
+}
+
+function isEmail(s: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s.trim())
 }
 
 function safeParse(s: string): unknown {
